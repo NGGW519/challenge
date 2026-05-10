@@ -1,0 +1,32 @@
+# 합성 fixture — Trial 2에서 force penalty -12 (지속 20N 초과)
+trials:
+  - trial_id: 1
+    tier_1_validity: 1
+    tier_2:
+      smoothness_score: 5.5
+      duration_score: 9.0
+      efficiency_score: 4.5
+      force_penalty: 0
+      contact_penalty: 0
+    tier_3_insertion: 75
+    total: 95.0
+  - trial_id: 2
+    tier_1_validity: 1
+    tier_2:
+      smoothness_score: 5.0
+      duration_score: 7.5
+      efficiency_score: 4.0
+      force_penalty: -12
+      contact_penalty: 0
+    tier_3_insertion: 50
+    total: 55.5
+  - trial_id: 3
+    tier_1_validity: 1
+    tier_2:
+      smoothness_score: 5.3
+      duration_score: 10.0
+      efficiency_score: 4.8
+      force_penalty: 0
+      contact_penalty: 0
+    tier_3_insertion: 75
+    total: 96.1

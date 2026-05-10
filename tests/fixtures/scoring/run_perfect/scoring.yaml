@@ -1,0 +1,32 @@
+# 합성 fixture — CheatCode급 완벽 실행 시나리오 (모든 trial 75점 + Tier 2 ~16점)
+trials:
+  - trial_id: 1
+    tier_1_validity: 1
+    tier_2:
+      smoothness_score: 5.8
+      duration_score: 10.2
+      efficiency_score: 5.5
+      force_penalty: 0
+      contact_penalty: 0
+    tier_3_insertion: 75
+    total: 97.5
+  - trial_id: 2
+    tier_1_validity: 1
+    tier_2:
+      smoothness_score: 6.0
+      duration_score: 9.8
+      efficiency_score: 5.2
+      force_penalty: 0
+      contact_penalty: 0
+    tier_3_insertion: 75
+    total: 97.0
+  - trial_id: 3
+    tier_1_validity: 1
+    tier_2:
+      smoothness_score: 5.6
+      duration_score: 11.0
+      efficiency_score: 5.8
+      force_penalty: 0
+      contact_penalty: 0
+    tier_3_insertion: 75
+    total: 98.4
