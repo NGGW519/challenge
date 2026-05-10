@@ -20,6 +20,20 @@ cd "$WORKDIR"
 
 echo "[onstart] $(date) starting bootstrap"
 
+# 0. base CUDA 이미지에 빠진 필수 도구 설치
+#    (curl/git은 이미 있다고 가정 — apt만 확장)
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -q
+apt-get install -y -q --no-install-recommends \
+    python3-pip python3-venv tmux htop \
+    ca-certificates build-essential lsb-release \
+    libgl1 libglib2.0-0 \
+  || echo "[onstart] WARN: some apt packages failed (계속 진행)"
+
+# huggingface_hub[cli]는 pip로만 받을 수 있음
+pip install --no-cache-dir --quiet 'huggingface_hub[cli]>=0.23' \
+  || echo "[onstart] WARN: huggingface_hub install failed"
+
 # 1. 토킷 + 작업 저장소 clone
 if [[ ! -d aic ]]; then
   git clone https://github.com/intrinsic-dev/aic.git aic
