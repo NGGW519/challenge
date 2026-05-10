@@ -1,0 +1,40 @@
+# aic/docker/docker-compose.yaml 위에 덧붙여 사용:
+#
+#   docker compose \
+#     -f aic/docker/docker-compose.yaml \
+#     -f aic_work/docker/baseline-override.yaml \
+#     up --abort-on-container-exit --exit-code-from eval
+#
+# 환경변수:
+#   AIC_POLICY_MODULE  — 실행할 정책 (예: aic_example_policies.ros.CheatCode)
+#   AIC_GROUND_TRUTH   — 'true' if CheatCode (학습/디버그용만)
+#   AIC_RESULTS_DIR    — scoring.yaml 출력 위치 (호스트 디렉토리)
+
+name: aic
+services:
+  eval:
+    command: >
+      gazebo_gui:=false
+      launch_rviz:=false
+      ground_truth:=${AIC_GROUND_TRUTH:-false}
+      start_aic_engine:=true
+      shutdown_on_aic_engine_exit:=true
+      model_discovery_timeout_seconds:=600
+    volumes:
+      - ${AIC_RESULTS_DIR:-./aic_results}:/root/aic_results
+
+  model:
+    # baseline 평가는 aic 토킷에 들어있는 example policy를 그대로 쓴다.
+    # dev image로 띄워서 -p policy:= 로 주입.
+    image: ghcr.io/nggw519/aic-dev:latest
+    command: >
+      bash -lc "source /workspace/aic/install/setup.bash 2>/dev/null || true;
+                pixi --manifest-path /workspace/aic/pixi.toml run
+                ros2 run aic_model aic_model
+                  -p policy:=${AIC_POLICY_MODULE:-aic_example_policies.ros.WaveArm}
+                  -p use_sim_time:=true"
+    volumes:
+      - /home/nggw/challenge/aic:/workspace/aic:ro
+      - /home/nggw/challenge/aic_work:/workspace/aic_work
+    environment:
+      AIC_POLICY_MODULE: ${AIC_POLICY_MODULE:-aic_example_policies.ros.WaveArm}

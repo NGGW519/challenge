@@ -1,0 +1,31 @@
+# 우리 제출 컨테이너(aic-submit:vN)를 평가 컨테이너에 물리는 override.
+# 사용:
+#   docker compose \
+#     -f aic/docker/docker-compose.yaml \
+#     -f aic_work/docker/eval-override.yaml \
+#     up --abort-on-container-exit --exit-code-from eval
+#
+# 환경변수:
+#   AIC_RESULTS_DIR    — scoring.yaml 출력 위치 (호스트)
+#   AIC_SUBMIT_TAG     — 사용할 model image 태그 (예: v1, v1-abc1234)
+
+name: aic
+services:
+  eval:
+    command: >
+      gazebo_gui:=false
+      launch_rviz:=false
+      ground_truth:=false
+      start_aic_engine:=true
+      shutdown_on_aic_engine_exit:=true
+      model_discovery_timeout_seconds:=600
+    volumes:
+      - ${AIC_RESULTS_DIR:-./aic_results}:/root/aic_results
+
+  model:
+    image: aic-submit:${AIC_SUBMIT_TAG:-v1}
+    environment:
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+      ZENOH_ROUTER_CHECK_ATTEMPTS: -1
+      AIC_ROUTER_ADDR: eval:7447
+      AIC_MODEL_PASSWD: CHANGE_IN_PROD

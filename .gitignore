@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtualenv / Pixi
+.venv/
+venv/
+.pixi/
+pixi.lock.bak
+
+# Build artifacts
+build/
+install/
+log/
+dist/
+*.whl
+
+# ROS
+*.bag
+*.mcap
+*.db3
+*.db3-shm
+*.db3-wal
+*.active
+
+# ML datasets and checkpoints (never commit — too large; use R2 / HF Hub)
+datasets/
+models/
+checkpoints/
+weights/*.pt
+weights/*.pth
+weights/*.bin
+weights/*.safetensors
+weights/*.ckpt
+*.onnx
+
+# Logs and eval outputs
+logs/
+aic_results/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Secrets — NEVER commit
+.env
+.env.*
+*.pem
+*.key
+.aws/
+rclone.conf
+secrets/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# colcon
+.colcon/
+COLCON_IGNORE

@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aic_model_pkg</name>
+  <version>0.1.0</version>
+  <description>AIC Challenge participant policy (HybridPolicy: visual + ACT IL + force-guided).</description>
+  <maintainer email="srrd1357@gmail.com">nggw519</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>aic_model</depend>
+  <depend>aic_task_interfaces</depend>
+  <depend>aic_control_interfaces</depend>
+  <depend>aic_model_interfaces</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>cv_bridge</depend>
+
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

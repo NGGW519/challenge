@@ -1,0 +1,2 @@
+# 학습된 가중치는 git에 커밋하지 않는다 (R2/HF Hub에서 풀).
+# 빌드 시점에 weights/act_v1.pt, weights/port_detector_v1.pt 가 여기 들어와야 함.

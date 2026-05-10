@@ -1,0 +1,66 @@
+[project]
+name = "aic-work"
+version = "0.1.0"
+description = "AIC Challenge participant solution (solo) — strategy, training, and submission code."
+requires-python = ">=3.10,<3.13"
+license = "Apache-2.0"
+authors = [{ name = "nggw519" }]
+
+# Pixi가 ROS 2 Kilted를 robostack channel로 가져오므로 Python deps만 여기에.
+# 학습/평가용. 제출 컨테이너에선 가벼운 subset만 install.
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "torch>=2.3",
+    "torchvision>=0.18",
+    "pyyaml>=6.0",
+    "pillow>=10.0",
+    "opencv-python-headless>=4.9",
+    "pyarrow>=14.0",
+    "pandas>=2.1",
+    "matplotlib>=3.8",
+    "tqdm>=4.66",
+    "rich>=13.7",
+    "transforms3d>=0.4.1",
+]
+
+[project.optional-dependencies]
+train = [
+    "lerobot>=0.1.5",
+    "ultralytics>=8.2",
+    "datasets>=2.18",
+    "huggingface_hub>=0.23",
+    "wandb>=0.17",
+    "einops>=0.7",
+    "diffusers>=0.27",
+    "accelerate>=0.30",
+]
+sim = [
+    "mujoco>=3.1",
+    "dm-control>=1.0.18",
+]
+eval = [
+    "rosbag2-py",  # via robostack (Pixi)
+]
+dev = [
+    "ruff>=0.4",
+    "pytest>=8.0",
+    "ipython>=8.20",
+    "ipykernel>=6.29",
+    "jupyterlab>=4.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []  # 이 디렉토리 자체는 패키지 아님; aic_model_pkg/는 colcon이 빌드
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = ["E501"]
