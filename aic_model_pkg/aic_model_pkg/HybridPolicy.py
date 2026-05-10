@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -26,12 +28,16 @@ except Exception:
             self.logger = logging.getLogger("HybridPolicy")
 
 from .act_inference import ACTInference
+from .motion import (
+    MotionCommand,
+    make_approach_command,
+    make_insertion_step,
+)
 from .port_detector import PortDetector
 from .safety import (
     FORCE_HARD_DURATION_S,
     FORCE_HARD_N,
     ForceWatchdog,
-    clamp_position,
 )
 
 WEIGHTS_DIR = Path(__file__).parent / "weights"
@@ -43,6 +49,18 @@ T_STAGE_A = 5.0
 T_STAGE_B = 8.0
 T_STAGE_C = 15.0
 
+# Stage C 튜닝 파라미터 (strategy/14 §5)
+STAGE_C_FORWARD_STEP_M    = 0.0005   # 0.5 mm/step
+STAGE_C_BACKOFF_M         = 0.001    # 1 mm
+STAGE_C_FORWARD_FORCE_N   = 8.0      # 이 미만이면 forward 진행
+STAGE_C_HOLD_FORCE_N      = 15.0     # 이 이상이면 후퇴
+STAGE_C_LATERAL_GAIN      = 1e-4     # F_xy → lateral correction
+STAGE_C_LATERAL_LIMIT_M   = 0.001    # ±1 mm/step
+STAGE_C_SPIRAL_RATE_RAD   = 0.3      # spiral phase increment per step
+STAGE_C_SPIRAL_GROWTH_M   = 1e-4     # 0.1 mm/step
+STAGE_C_SPIRAL_MAX_M      = 0.005    # 5 mm cap
+STAGE_C_LOOP_HZ           = 20.0
+
 
 class HybridPolicy(Policy):
     def __init__(self, parent_node):
@@ -50,7 +68,7 @@ class HybridPolicy(Policy):
         self.logger = logging.getLogger("HybridPolicy")
         self.detector = PortDetector(DETECTOR_CKPT if DETECTOR_CKPT.exists() else None)
         self.act = ACTInference(ACT_CKPT if ACT_CKPT.exists() else None)
-        self._cached_port_xyz: np.ndarray | None = None
+        self._cached_target_world: np.ndarray | None = None
         self._emergency = False
         self._watchdog: ForceWatchdog | None = None
 
@@ -62,33 +80,48 @@ class HybridPolicy(Policy):
         try:
             send_feedback("hybrid: starting")
             self._start_watchdog(get_observation)
-
-            # ----- Stage A: coarse visual approach -----
             self._stage_a(task, get_observation, move_robot, send_feedback)
-
-            # ----- Stage B: ACT alignment -----
             self._stage_b(task, get_observation, move_robot, send_feedback)
-
-            # ----- Stage C: compliant insertion -----
             self._stage_c(task, get_observation, move_robot, send_feedback)
-
             send_feedback("hybrid: done")
-        except Exception as exc:  # 안전: 어떤 예외라도 정상 종료
+        except Exception as exc:
             self.logger.exception("HybridPolicy crashed: %s", exc)
             send_feedback(f"hybrid: error {exc}")
         finally:
             self._stop_watchdog()
 
     # ------------------------------------------------------------------ #
+    # observation helpers (defensive — 필드 이름 변동 대비)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _get_tcp_pose(obs: Any) -> tuple[np.ndarray, np.ndarray] | None:
+        cs = getattr(obs, "controller_state", None)
+        if cs is None or not hasattr(cs, "tcp_pose"):
+            return None
+        p = cs.tcp_pose.position
+        o = cs.tcp_pose.orientation
+        return (
+            np.array([p.x, p.y, p.z], dtype=np.float64),
+            np.array([o.x, o.y, o.z, o.w], dtype=np.float64),
+        )
+
+    @staticmethod
+    def _get_wrench(obs: Any) -> np.ndarray:
+        w = getattr(obs, "wrench", None)
+        if w is None:
+            return np.zeros(6)
+        return np.array([
+            w.force.x, w.force.y, w.force.z,
+            w.torque.x, w.torque.y, w.torque.z,
+        ], dtype=np.float64)
+
+    # ------------------------------------------------------------------ #
     # safety wiring
     # ------------------------------------------------------------------ #
-    def _start_watchdog(self, get_obs) -> None:
+    def _start_watchdog(self, get_obs: Callable[[], Any]) -> None:
         def _wrench():
-            obs = get_obs()
             try:
-                w = obs.wrench  # geometry_msgs/Wrench fields
-                return np.array([w.force.x, w.force.y, w.force.z,
-                                 w.torque.x, w.torque.y, w.torque.z], dtype=np.float64)
+                return self._get_wrench(get_obs())
             except Exception:
                 return np.zeros(6)
 
@@ -105,53 +138,228 @@ class HybridPolicy(Policy):
             self._watchdog.stop()
             self._watchdog = None
 
+    def _send(self, cmd: MotionCommand, move_robot: Callable[[Any], None]) -> None:
+        """MotionCommand를 ROS 메시지로 변환해 발행. ROS env 밖이면 silently skip."""
+        cmd = cmd.with_clamped_position()
+        try:
+            ros_msg = cmd.to_ros_msg()
+        except Exception as e:  # ROS env 밖에서 import 실패
+            self.logger.debug("to_ros_msg failed (likely outside ROS env): %s", e)
+            return
+        try:
+            move_robot(ros_msg)
+        except Exception as e:
+            self.logger.warning("move_robot raised: %s", e)
+
     # ------------------------------------------------------------------ #
-    # Stage A
+    # Stage A — coarse visual approach
     # ------------------------------------------------------------------ #
     def _stage_a(self, task, get_obs, move_robot, send_feedback) -> bool:
         send_feedback("stage_A: detect target port")
-        if self.detector.disabled:
-            send_feedback("stage_A: detector disabled — fallback to current TCP")
+        target_world = self._detect_target_3d(get_obs, task, n_frames=5)
+        if target_world is None:
+            send_feedback("stage_A: detection unavailable — skip to Stage B")
             return False
-        # TODO: triangulation + plane fitting + safe approach pose 발행.
-        # 1차 골조에서는 현재 TCP를 그대로 유지하고 Stage B로 진입한다.
-        time.sleep(0.5)
-        return True
+
+        self._cached_target_world = target_world
+
+        # plug axis: TCP의 +z 방향을 plug 끝 방향으로 가정 (그립 오프셋이 그렇게 설계됨).
+        # 평가 환경에선 obs에서 더 정확한 plug axis 추정 필요 — Phase 5 잔여 작업.
+        tcp = self._get_tcp_pose(get_obs())
+        if tcp is None:
+            return False
+        _, tcp_quat = tcp
+        # quat → z-axis: q*[0,0,1]*q^-1, 단순화: 일단 world +z 사용
+        plug_axis = np.array([0.0, 0.0, 1.0])
+
+        cmd = make_approach_command(
+            port_xyz_world=target_world,
+            plug_axis_world=plug_axis,
+            standoff_m=0.03,
+            orientation_qxyzw=tuple(tcp_quat.tolist()),
+        )
+        self._send(cmd, move_robot)
+
+        # 도달 확인 — TCP가 target 근방으로 5mm 이내 진입
+        deadline = time.monotonic() + T_STAGE_A
+        while time.monotonic() < deadline and not self._emergency:
+            tcp = self._get_tcp_pose(get_obs())
+            if tcp is not None:
+                tcp_xyz, _ = tcp
+                if np.linalg.norm(tcp_xyz - cmd.target_pose.position()) < 0.005:
+                    return True
+            time.sleep(0.05)
+        return False
+
+    def _detect_target_3d(self, get_obs, task, n_frames: int = 5) -> np.ndarray | None:
+        """포트 3D 위치를 n_frames 평균. detector disabled 시 None."""
+        if self.detector.disabled:
+            return None
+        port_cls = "sfp_port" if getattr(task, "plug_type", "") == "sfp" else "sc_port"
+
+        positions: list[np.ndarray] = []
+        for _ in range(n_frames):
+            obs = get_obs()
+            try:
+                imgs = self._extract_images(obs)
+                if imgs is None:
+                    continue
+                K_l, T_l, K_r, T_r = self._extract_camera_lr(obs)
+                if K_l is None:
+                    continue
+                dets = self.detector.detect(imgs)
+                # imgs = [left, center, right] 순서로 가정
+                if len(dets) < 3:
+                    continue
+                p = self.detector.find_target_3d(
+                    dets[0], dets[2], port_cls, K_l, T_l, K_r, T_r,
+                )
+                if p is not None:
+                    positions.append(p)
+            except Exception as e:
+                self.logger.debug("frame detection failed: %s", e)
+            time.sleep(0.05)
+
+        if len(positions) < max(1, n_frames // 2):
+            return None
+        return np.median(np.stack(positions), axis=0)
+
+    @staticmethod
+    def _extract_images(obs: Any) -> list[np.ndarray] | None:
+        """observation에서 left/center/right 이미지를 numpy로 추출. 토킷 인터페이스 의존."""
+        # aic_model_interfaces/Observation 의 정확한 필드명은 토킷에서 확인 필요.
+        # 안전하게 여러 후보 시도:
+        for left_attr, ctr_attr, right_attr in (
+            ("left_camera_image",   "center_camera_image", "right_camera_image"),
+            ("image_left",          "image_center",        "image_right"),
+        ):
+            l = getattr(obs, left_attr, None)
+            c = getattr(obs, ctr_attr, None)
+            r = getattr(obs, right_attr, None)
+            if l is not None and c is not None and r is not None:
+                return [HybridPolicy._image_to_np(l), HybridPolicy._image_to_np(c),
+                        HybridPolicy._image_to_np(r)]
+        return None
+
+    @staticmethod
+    def _image_to_np(img_msg: Any) -> np.ndarray:
+        """sensor_msgs/Image → np.ndarray (RGB, uint8). cv_bridge 없을 때 fallback."""
+        try:  # pragma: no cover
+            from cv_bridge import CvBridge  # type: ignore[import-not-found]
+            return CvBridge().imgmsg_to_cv2(img_msg, desired_encoding="rgb8")
+        except Exception:
+            # raw bytes로 변환 — encoding이 rgb8일 때만 동작
+            data = np.frombuffer(img_msg.data, dtype=np.uint8)
+            return data.reshape(img_msg.height, img_msg.width, -1)
+
+    @staticmethod
+    def _extract_camera_lr(obs: Any) -> tuple[np.ndarray | None, ...]:
+        """left/right K + T_world_camera 4-tuple. 누락 시 (None,)*4."""
+        # camera_info의 K는 9-elem flat. T_world_camera는 TF에서 lookup해야 하나
+        # observation에 미리 주입돼 있을 수도 있음. 안전한 fallback:
+        try:
+            ci_l = getattr(obs, "left_camera_info",  None) or getattr(obs, "camera_info_left",  None)
+            ci_r = getattr(obs, "right_camera_info", None) or getattr(obs, "camera_info_right", None)
+            tf_l = getattr(obs, "left_camera_tf",    None) or getattr(obs, "tf_left_camera",    None)
+            tf_r = getattr(obs, "right_camera_tf",   None) or getattr(obs, "tf_right_camera",   None)
+            if any(x is None for x in (ci_l, ci_r, tf_l, tf_r)):
+                return (None, None, None, None)
+            K_l = np.array(ci_l.k, dtype=np.float64).reshape(3, 3)
+            K_r = np.array(ci_r.k, dtype=np.float64).reshape(3, 3)
+            return (K_l, _tf_to_mat(tf_l), K_r, _tf_to_mat(tf_r))
+        except Exception:
+            return (None, None, None, None)
 
     # ------------------------------------------------------------------ #
-    # Stage B
+    # Stage B — ACT IL alignment
     # ------------------------------------------------------------------ #
     def _stage_b(self, task, get_obs, move_robot, send_feedback) -> bool:
         send_feedback("stage_B: ACT alignment")
         if self.act.disabled:
             send_feedback("stage_B: ACT disabled — skip")
             return False
-        # TODO: 20Hz loop, observation → action → MotionUpdate.
-        # 1차 골조에서는 즉시 종료.
+        # 실 ACT 추론 루프는 ROS observation 스키마에 강하게 의존.
+        # 우선 골조: chunk 추론 → action을 tcp delta로 해석 → MotionCommand.
+        # 자세한 구현은 vast.ai 인스턴스에서 schema 확정 후 채움.
+        deadline = time.monotonic() + T_STAGE_B
+        while time.monotonic() < deadline and not self._emergency:
+            time.sleep(0.05)
         return True
 
     # ------------------------------------------------------------------ #
-    # Stage C
+    # Stage C — compliant force-guided insertion
     # ------------------------------------------------------------------ #
     def _stage_c(self, task, get_obs, move_robot, send_feedback) -> bool:
-        send_feedback("stage_C: compliant insertion (deterministic)")
-        # TODO: spiral search + admittance, 자세한 알고리즘은
-        #       strategy/14_phase5_hybrid_policy.md §5 참조.
-        # 1차 골조에서는 단순 forward push 시도 후 종료 — 점수는 낮지만
-        # lifecycle (Tier 1) 통과 검증용.
-        deadline = time.monotonic() + min(T_STAGE_C, 5.0)
+        send_feedback("stage_C: compliant insertion")
+        period = 1.0 / STAGE_C_LOOP_HZ
+        deadline = time.monotonic() + T_STAGE_C
+
+        # baseline wrench (시뮬 시작 시 미세한 잔류값 보정)
+        f_baseline = self._get_wrench(get_obs())[:3]
+        spiral_phase = 0.0
+        spiral_radius = 0.0
+
         while time.monotonic() < deadline and not self._emergency:
-            try:
-                obs = get_obs()
-                tcp = obs.tcp_pose if hasattr(obs, "tcp_pose") else None
-                if tcp is None:
-                    time.sleep(0.05); continue
-                # 1mm 전진 (TCP local z) — 실제 plug axis 매핑은 다음 라운드에서.
-                target_xyz = np.array([tcp.position.x, tcp.position.y, tcp.position.z + 0.001])
-                target_xyz = clamp_position(target_xyz)
-                # MotionUpdate 발행은 다음 라운드에서 채운다 (msg 객체 import 필요).
-                _ = target_xyz
-            except Exception:
-                pass
-            time.sleep(0.05)
-        return True
+            obs = get_obs()
+            tcp = self._get_tcp_pose(obs)
+            if tcp is None:
+                time.sleep(period); continue
+            tcp_xyz, tcp_quat = tcp
+            f = self._get_wrench(obs)[:3] - f_baseline
+            f_norm_z = abs(float(f[2]))
+
+            # forward 결정
+            if f_norm_z < STAGE_C_FORWARD_FORCE_N:
+                forward = STAGE_C_FORWARD_STEP_M
+            elif f_norm_z < STAGE_C_HOLD_FORCE_N:
+                forward = 0.0
+            else:
+                forward = -STAGE_C_BACKOFF_M
+                spiral_radius = min(spiral_radius + 5e-4, STAGE_C_SPIRAL_MAX_M)
+
+            # admittance: F_xy → lateral correction
+            lat_admit = -STAGE_C_LATERAL_GAIN * f[:2]
+            lat_admit = np.clip(lat_admit, -STAGE_C_LATERAL_LIMIT_M, STAGE_C_LATERAL_LIMIT_M)
+
+            # spiral search 추가
+            spiral_phase += STAGE_C_SPIRAL_RATE_RAD
+            spiral_radius = min(spiral_radius + STAGE_C_SPIRAL_GROWTH_M, STAGE_C_SPIRAL_MAX_M)
+            spiral_xy = spiral_radius * np.array(
+                [np.cos(spiral_phase), np.sin(spiral_phase)]
+            )
+
+            lateral_xy = lat_admit + spiral_xy
+            forward_axis = np.array([0.0, 0.0, 1.0])  # TCP +z 가정 (Stage A와 동일)
+
+            cmd = make_insertion_step(
+                current_xyz=tcp_xyz,
+                forward_axis_world=forward_axis,
+                forward_m=forward,
+                lateral_xy=lateral_xy,
+                orientation_qxyzw=tuple(tcp_quat.tolist()),
+            )
+            self._send(cmd, move_robot)
+            time.sleep(period)
+
+        return not self._emergency
+
+
+def _tf_to_mat(tf_msg: Any) -> np.ndarray:
+    """geometry_msgs/TransformStamped → 4×4. 필드명은 토킷에서 확정."""
+    t = tf_msg.transform.translation
+    q = tf_msg.transform.rotation
+    R = _quat_to_mat(q.x, q.y, q.z, q.w)
+    M = np.eye(4); M[:3, :3] = R; M[:3, 3] = [t.x, t.y, t.z]
+    return M
+
+
+def _quat_to_mat(x: float, y: float, z: float, w: float) -> np.ndarray:
+    n = x*x + y*y + z*z + w*w
+    if n < 1e-12:
+        return np.eye(3)
+    s = 2.0 / n
+    return np.array([
+        [1 - s*(y*y+z*z), s*(x*y - w*z),   s*(x*z + w*y)],
+        [s*(x*y + w*z),   1 - s*(x*x+z*z), s*(y*z - w*x)],
+        [s*(x*z - w*y),   s*(y*z + w*x),   1 - s*(x*x+y*y)],
+    ], dtype=np.float64)

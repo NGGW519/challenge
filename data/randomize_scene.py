@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import copy
 import math
+import os
 import random
 from pathlib import Path
 
@@ -34,10 +35,16 @@ def _resolve_base_config(path: str | None) -> Path:
         p = Path(path)
         if p.exists():
             return p
+    env = os.environ.get("AIC_SAMPLE_CONFIG")
+    if env and Path(env).exists():
+        return Path(env)
     for candidate in (DEFAULT_BASE_CONFIG, LOCAL_BASE_CONFIG):
         if candidate.exists():
             return candidate
-    raise FileNotFoundError("base sample_config.yaml not found in expected locations")
+    raise FileNotFoundError(
+        "base sample_config.yaml not found. Set --base, AIC_SAMPLE_CONFIG, or place it at "
+        f"{DEFAULT_BASE_CONFIG} or {LOCAL_BASE_CONFIG}"
+    )
 
 
 def _sample_nic_layout(rng: random.Random) -> tuple[dict, int]:
