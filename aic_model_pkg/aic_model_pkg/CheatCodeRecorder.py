@@ -1,13 +1,15 @@
 """CheatCode + rosbag2 mcap 기록 — Phase 2 데이터 수집의 ground-truth 시연자.
 
+# AIC-TRAINING-ONLY: 이 파일은 학습 데이터 수집 전용. 제출 컨테이너에 절대
+# 포함하면 안 됨. (`/scoring/tf` ground-truth를 구독하므로 챌린지 규칙 위반.)
+# - submit.Dockerfile은 .dockerignore로 이 파일 제외.
+# - audit_pre_submit.sh는 위 마커를 인식해 검사 예외 처리.
+
 토킷의 `aic_example_policies.ros.CheatCode`를 그대로 상속해 동일한 trajectory를
 실행하면서, 모든 sensor/command 토픽을 rosbag2(mcap)에 기록한다.
 
 활성 조건: 환경변수 `AIC_RECORD_BAG_DIR`가 설정돼 있어야 함. 미설정 시
 super().insert_cable()만 호출 (= 평범한 CheatCode 동작).
-
-평가 환경에서는 절대 사용 금지 — `/scoring/tf` ground-truth를 구독하기 때문.
-이 정책은 학습 데이터 수집(Phase 2)에서만 사용.
 """
 
 from __future__ import annotations

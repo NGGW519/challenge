@@ -12,19 +12,30 @@ SRC="${ROOT}/aic_model_pkg/"
 FAIL=0
 
 STRICT="${STRICT:-0}"  # 1 = 제출 직전 모드 (weights 파일 누락도 fail)
+TRAINING_ONLY_MARKER="AIC-TRAINING-ONLY"
 
 section() { printf "\n== %s ==\n" "$1"; }
-# .py 파일만 검사 (xml/md docstring/schema URL은 제외)
+
+# .py 파일만 검사. AIC-TRAINING-ONLY 마커가 있는 파일은 학습 전용이라
+# 제출 이미지에 포함되지 않으므로 검사에서 제외 (.dockerignore가 빌드 시 차단).
 check_clean() {
   local label="$1"; shift
-  local found
-  if found=$(grep -rEn --include='*.py' "$@" "$SRC" 2>/dev/null); then
-    if [[ -n "$found" ]]; then
-      printf "  ❌ FOUND:\n%s\n" "$found"
-      FAIL=1
-    else
-      printf "  ✅ %s — clean\n" "$label"
-    fi
+  local raw filtered
+  raw=$(grep -rEn --include='*.py' "$@" "$SRC" 2>/dev/null || true)
+  filtered=""
+  if [[ -n "$raw" ]]; then
+    while IFS= read -r line; do
+      local file="${line%%:*}"
+      [[ -z "$file" ]] && continue
+      if grep -q "$TRAINING_ONLY_MARKER" "$file" 2>/dev/null; then
+        continue   # 학습 전용 — 제외
+      fi
+      filtered+="${line}"$'\n'
+    done <<< "$raw"
+  fi
+  if [[ -n "$filtered" ]]; then
+    printf "  ❌ FOUND:\n%s" "$filtered"
+    FAIL=1
   else
     printf "  ✅ %s — clean\n" "$label"
   fi

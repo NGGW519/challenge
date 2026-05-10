@@ -1,0 +1,40 @@
+# submit.Dockerfile 빌드 시 제외할 파일.
+# 학습 전용 / 보안 / 큰 파일.
+
+# 학습 전용 — 평가 컨테이너에 절대 포함 금지
+aic_model_pkg/aic_model_pkg/CheatCodeRecorder.py
+
+# 데이터 수집 / 학습 코드 — 제출 이미지에 불필요
+data/
+training/
+
+# 큰 파일 / 휘발성
+datasets/
+logs/
+checkpoints/
+aic_results/
+raw_episodes/
+
+# Python 캐시
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# git
+.git/
+.github/
+
+# 보고서 / 문서
+reports/
+strategy/
+README.md
+CLAUDE.md
+
+# 테스트
+tests/
+
+# 비밀
+.env
+.env.*
+secrets/
