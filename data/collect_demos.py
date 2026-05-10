@@ -9,7 +9,7 @@
   3. trial 종료 후 compose down + bag 검증
 N 에피소드 완료 후:
   4. `bag_to_lerobot.py`로 LeRobot v2.1 변환
-  5. `huggingface-cli upload`로 HF Hub 업로드 (--push-hf 시)
+  5. `hf upload`로 HF Hub 업로드 (--push-hf 시) — huggingface_hub 1.x CLI
 
 사용:
     # 동작 시뮬레이션 (실제 docker 호출 안 함)
@@ -216,12 +216,13 @@ def maybe_push_hf(args: argparse.Namespace) -> None:
     if args.dry_run:
         logger.info("[dry_run] would upload %s → hf://%s", args.convert_to_lerobot, args.push_hf)
         return
-    if shutil.which("huggingface-cli") is None:
-        logger.warning("huggingface-cli not found — skipping HF upload")
+    # huggingface_hub 1.x: CLI 이름이 `huggingface-cli` → `hf` 로 변경.
+    if shutil.which("hf") is None:
+        logger.warning("hf CLI not found — skipping HF upload (pip install huggingface_hub)")
         return
-    cmd = ["huggingface-cli", "upload", args.push_hf,
+    cmd = ["hf", "upload", args.push_hf,
            args.convert_to_lerobot, ".",
-           "--repo-type=dataset",
+           "--repo-type", "dataset",
            "--commit-message", "demos batch"]
     logger.info("uploading to HF: %s", " ".join(cmd))
     subprocess.run(cmd, check=False, cwd=ROOT)

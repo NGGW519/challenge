@@ -304,7 +304,7 @@ pixi run python aic_work/scripts/check_dataset.py \
 rclone sync aic_work/datasets/aic_v0/ r2:aic-datasets/aic_v0/ --progress
 
 # HuggingFace Hub (private)
-huggingface-cli upload nggw519/aic_v0 ./aic_work/datasets/aic_v0/ --repo-type=dataset --private
+hf upload nggw519/aic_v0 ./aic_work/datasets/aic_v0/ --repo-type dataset
 ```
 
 R2: 빠른 vast.ai 풀용. HF Hub: 영구 백업 + 버전 관리.

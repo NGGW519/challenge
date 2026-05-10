@@ -64,8 +64,8 @@ pixi add lerobot
 pixi run python -c "import lerobot; print(lerobot.__version__)"
 
 # dataset 풀 (R2 또는 HF)
-huggingface-cli login
-huggingface-cli download --repo-type=dataset nggw519/aic_v0 \
+hf auth login
+hf download nggw519/aic_v0 --repo-type dataset \
     --local-dir aic_work/datasets/aic_v0
 ```
 

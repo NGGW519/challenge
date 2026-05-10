@@ -41,7 +41,7 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tm
     && rm -rf /tmp/awscli.zip /tmp/aws
 
 # 5. HuggingFace CLI
-RUN pip install --no-cache-dir huggingface_hub[cli]
+RUN pip install --no-cache-dir 'huggingface_hub>=1.0'
 
 WORKDIR /workspace
 

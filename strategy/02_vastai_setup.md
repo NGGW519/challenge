@@ -53,7 +53,7 @@ vast.ai 인스턴스는 host 다운/계약 종료/사용자 stop으로 사라질
 | Tier | 용도 | 매체 | 동기화 |
 |---|---|---|---|
 | **Tier 0 (Hot)** | 현재 학습 중 active dataset, 현재 ckpt | 인스턴스 NVMe | — |
-| **Tier 1 (Cold)** | 최신/best ckpt, dataset 원본, 평가 결과 | HuggingFace Hub (private repo) | `huggingface-cli upload`, 매 ckpt마다 |
+| **Tier 1 (Cold)** | 최신/best ckpt, dataset 원본, 평가 결과 | HuggingFace Hub (private repo) | `hf upload`, 매 ckpt마다 |
 
 ### 2.2 HuggingFace Hub 셋업
 
@@ -63,11 +63,11 @@ vast.ai 인스턴스는 host 다운/계약 종료/사용자 stop으로 사라질
 
 ```bash
 # 인스턴스 부팅 시 (onstart.sh가 자동 실행)
-huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+hf login --token "$HF_TOKEN" --add-to-git-credential
 
 # repo 한 번만 생성 (사용자 로컬 또는 첫 인스턴스에서)
-huggingface-cli repo create aic-ckpts    --type=model   --private
-huggingface-cli repo create aic-datasets --type=dataset --private
+hf repo create aic-ckpts    --type=model   --private
+hf repo create aic-datasets --type=dataset --private
 ```
 
 ### 2.3 자동 ckpt 푸시
@@ -87,7 +87,7 @@ HfApi().upload_folder(
 
 명령행 등가:
 ```bash
-huggingface-cli upload nggw519/aic-ckpts ./models/act_v1/ act_v1/ --repo-type=model
+hf upload nggw519/aic-ckpts ./models/act_v1/ act_v1/ --repo-type=model
 ```
 
 매 ckpt(`step_00050000.pt` 등)마다 push. 가중치 ~150MB이라 5–30초 소요.
@@ -116,7 +116,7 @@ curl -fsSL https://pixi.sh/install.sh | bash
 echo 'export PATH="$HOME/.pixi/bin:$PATH"' >> ~/.bashrc
 
 # 3. HuggingFace CLI (R2 대신)
-pip install -q huggingface_hub[cli]
+pip install -q 'huggingface_hub>=1.0'
 
 # 4. 작업 디렉토리 동기화
 mkdir -p /workspace
@@ -125,11 +125,11 @@ git clone https://github.com/intrinsic-dev/aic.git aic
 git clone https://github.com/NGGW519/challenge.git aic_work
 
 # 5. HF 로그인 (HF_TOKEN 환경변수 사용)
-huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+hf login --token "$HF_TOKEN" --add-to-git-credential
 
 # 6. 최신 ckpt 풀 (있으면)
 mkdir -p /workspace/aic_work/checkpoints
-huggingface-cli download --repo-type=model nggw519/aic-ckpts \
+hf download --repo-type=model nggw519/aic-ckpts \
     --local-dir /workspace/aic_work/checkpoints || true
 
 # 7. tmux 시작
@@ -233,7 +233,7 @@ done
 ### 6.2 인스턴스 종료 → 새 인스턴스에서 재개
 
 1. 새 인스턴스 spin-up (동일 image)
-2. on-start 스크립트가 자동으로 `huggingface-cli download nggw519/aic-ckpts` 풀
+2. on-start 스크립트가 자동으로 `hf download nggw519/aic-ckpts` 풀
 3. `scripts/train_with_resume.sh` 실행 → 직전 ckpt에서 재개
 
 손실: 마지막 ckpt 이후 작업 (`ckpt_every` 단위, 기본 5,000 step ≈ 25분).

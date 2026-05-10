@@ -3,7 +3,7 @@
 # vast.ai console > Instance > Edit Image Config > On-start script 에 등록하거나,
 # ssh 직후 수동으로 한 번 실행.
 #
-# 가정: image = ghcr.io/nggw519/aic-dev:latest (curl, git, pixi, huggingface-cli, aws 포함)
+# 가정: image = ghcr.io/nggw519/aic-dev:latest (curl, git, pixi, hf CLI, aws 포함)
 # 환경변수 (vast.ai env 또는 .env 파일):
 #   HF_TOKEN                 — HuggingFace Hub write 토큰 (필수)
 #   HF_CKPT_REPO             — ckpt repo (기본 nggw519/aic-ckpts)
@@ -30,8 +30,8 @@ apt-get install -y -q --no-install-recommends \
     libgl1 libglib2.0-0 \
   || echo "[onstart] WARN: some apt packages failed (계속 진행)"
 
-# huggingface_hub[cli]는 pip로만 받을 수 있음
-pip install --no-cache-dir --quiet 'huggingface_hub[cli]>=0.23' \
+# huggingface_hub 1.x — CLI는 `hf` 명령으로 함께 설치됨 (extras 불필요)
+pip install --no-cache-dir --quiet 'huggingface_hub>=1.0' \
   || echo "[onstart] WARN: huggingface_hub install failed"
 
 # 1. 토킷 + 작업 저장소 clone
@@ -48,9 +48,10 @@ if [[ -n "${GIT_USER_NAME:-}" ]]; then
   git -C aic_work config user.email "${GIT_USER_EMAIL:-noreply@example.com}"
 fi
 
-# 3. HuggingFace login (R2 대신 HF Hub 단독 백업)
+# 3. HuggingFace login (R2 대신 HF Hub 단독 백업).
+#    huggingface_hub 1.x부터 CLI 이름이 `huggingface-cli` → `hf` 로 변경.
 if [[ -n "${HF_TOKEN:-}" ]]; then
-  huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+  hf auth login --token "$HF_TOKEN" --add-to-git-credential
   echo "[onstart] huggingface login ok"
 else
   echo "[onstart] WARN: HF_TOKEN not set — ckpt push/pull will be skipped"
@@ -67,10 +68,11 @@ cd "$WORKDIR/aic_work"
 pip install --no-cache-dir -e .[train,dev] 2>/dev/null || \
     echo "[onstart] WARN: pip install partial (이건 ROS 환경 안 들어가도 OK)"
 
-# 6. 최신 ckpt 풀 (있으면)
+# 6. 최신 ckpt 풀 (있으면) — hf CLI 사용 (huggingface_hub 1.x)
 if [[ -n "${HF_TOKEN:-}" ]]; then
   mkdir -p "$WORKDIR/aic_work/checkpoints"
-  huggingface-cli download --repo-type=model "$HF_CKPT_REPO" \
+  hf download "$HF_CKPT_REPO" \
+      --repo-type model \
       --local-dir "$WORKDIR/aic_work/checkpoints" 2>/dev/null \
     || echo "[onstart] no ckpts in $HF_CKPT_REPO yet (first run)"
 fi

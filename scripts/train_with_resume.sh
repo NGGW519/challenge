@@ -55,11 +55,12 @@ while true; do
   sleep 30
 done
 
-# 최종 ckpt 백업 (학습 스크립트가 매 ckpt push했지만 종합본도 한 번 더)
-if [[ -d "$LOCAL" ]] && command -v huggingface-cli >/dev/null 2>&1; then
+# 최종 ckpt 백업 (학습 스크립트가 매 ckpt push했지만 종합본도 한 번 더).
+# huggingface_hub 1.x — `huggingface-cli` 가 `hf`로 변경됨.
+if [[ -d "$LOCAL" ]] && command -v hf >/dev/null 2>&1; then
   echo "[train] final upload to hf://${HF_REPO}/${SUBPATH}"
-  huggingface-cli upload "$HF_REPO" "$LOCAL" "$SUBPATH" \
-      --repo-type=model \
+  hf upload "$HF_REPO" "$LOCAL" "$SUBPATH" \
+      --repo-type model \
       --commit-message="final ${WHAT} ${TS}" || \
       echo "[train] WARN: final upload failed (학습 자체는 성공)"
 fi
