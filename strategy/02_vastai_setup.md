@@ -43,47 +43,54 @@ vast.ai 마켓의 PyTorch / Ubuntu 24.04 + CUDA 12.1 이미지를 시작점으�
 
 vast.ai 인스턴스는 host 다운/계약 종료/사용자 stop으로 사라질 수 있다. 절대로 인스턴스 로컬에만 데이터를 두지 말 것.
 
-### 2.1 3-tier 스토리지
+> **결정 (2026-05-10)**: 단순함을 위해 **HuggingFace Hub 단독 백업**. R2/S3는 사용 안 함.
+> - 사용자가 관리할 자격증명 1개 (HF token)로 끝.
+> - private repo는 무료, 큰 파일도 git LFS로 자동 처리.
+> - push 속도가 R2 대비 느릴 수 있으나 (HF는 git LFS 단일 push) 우리 ckpt 단위(<200MB)에선 충분.
+
+### 2.1 2-tier 스토리지
 
 | Tier | 용도 | 매체 | 동기화 |
 |---|---|---|---|
 | **Tier 0 (Hot)** | 현재 학습 중 active dataset, 현재 ckpt | 인스턴스 NVMe | — |
-| **Tier 1 (Warm)** | 최신 ckpt, 평가 결과, 코드 | S3 (Cloudflare R2 또는 AWS) | rclone, 1분 주기 |
-| **Tier 2 (Cold)** | 데이터셋 원본, 결정적 best ckpt 마스터 | HuggingFace Hub (private repo) | git lfs / huggingface_hub |
+| **Tier 1 (Cold)** | 최신/best ckpt, dataset 원본, 평가 결과 | HuggingFace Hub (private repo) | `huggingface-cli upload`, 매 ckpt마다 |
 
-### 2.2 rclone 설정 (Cloudflare R2 권장 — egress 무료)
+### 2.2 HuggingFace Hub 셋업
+
+권장 repo 2개 (둘 다 private):
+- `nggw519/aic-ckpts` (model repo) — ACT/YOLOv8 가중치, 평가 결과
+- `nggw519/aic-datasets` (dataset repo) — LeRobot v2.1 데이터셋, port_detection 합성 데이터
 
 ```bash
-# 인스턴스 부팅 시 자동 실행 (~/init_rclone.sh)
-curl https://rclone.org/install.sh | sudo bash
-mkdir -p ~/.config/rclone
-cat > ~/.config/rclone/rclone.conf <<'EOF'
-[r2]
-type = s3
-provider = Cloudflare
-access_key_id = <YOUR_KEY>
-secret_access_key = <YOUR_SECRET>
-endpoint = https://<account>.r2.cloudflarestorage.com
-acl = private
-EOF
+# 인스턴스 부팅 시 (onstart.sh가 자동 실행)
+huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+
+# repo 한 번만 생성 (사용자 로컬 또는 첫 인스턴스에서)
+huggingface-cli repo create aic-ckpts    --type=model   --private
+huggingface-cli repo create aic-datasets --type=dataset --private
 ```
 
 ### 2.3 자동 ckpt 푸시
 
 학습 코드에 hook 추가:
 ```python
-# train_act.py
-def on_epoch_end(epoch, ckpt_path):
-    subprocess.run([
-      "rclone", "copy", ckpt_path,
-      f"r2:aic-ckpts/run_{run_id}/", "--progress"
-    ], check=True)
+# train_act.py — push_ckpt()
+from huggingface_hub import HfApi
+HfApi().upload_folder(
+    repo_id="nggw519/aic-ckpts",
+    folder_path=str(ckpt_dir),
+    path_in_repo=f"act_v1/",
+    repo_type="model",
+    commit_message=f"step {step}",
+)
 ```
 
-또는 더 단순하게 cron으로 1분마다 동기화:
+명령행 등가:
 ```bash
-* * * * * rclone sync ~/aic_work/checkpoints/ r2:aic-ckpts/$(hostname)/ --max-age 5m --quiet
+huggingface-cli upload nggw519/aic-ckpts ./models/act_v1/ act_v1/ --repo-type=model
 ```
+
+매 ckpt(`step_00050000.pt` 등)마다 push. 가중치 ~150MB이라 5–30초 소요.
 
 ---
 
@@ -108,8 +115,8 @@ apt update && apt install -y \
 curl -fsSL https://pixi.sh/install.sh | bash
 echo 'export PATH="$HOME/.pixi/bin:$PATH"' >> ~/.bashrc
 
-# 3. rclone (R2 백업)
-curl https://rclone.org/install.sh | bash
+# 3. HuggingFace CLI (R2 대신)
+pip install -q huggingface_hub[cli]
 
 # 4. 작업 디렉토리 동기화
 mkdir -p /workspace
@@ -117,13 +124,13 @@ cd /workspace
 git clone https://github.com/intrinsic-dev/aic.git aic
 git clone https://github.com/NGGW519/challenge.git aic_work
 
-# 5. 비밀 / 자격증명 복원
-mkdir -p ~/.config/rclone
-rclone --config /tmp/empty.conf config dump  # placeholder; 실제론 secrets 별도
-# 또는: aws s3 cp s3://my-secrets/rclone.conf ~/.config/rclone/rclone.conf
+# 5. HF 로그인 (HF_TOKEN 환경변수 사용)
+huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
 
-# 6. ckpt 풀
-rclone sync r2:aic-ckpts/latest/ /workspace/aic_work/checkpoints/
+# 6. 최신 ckpt 풀 (있으면)
+mkdir -p /workspace/aic_work/checkpoints
+huggingface-cli download --repo-type=model nggw519/aic-ckpts \
+    --local-dir /workspace/aic_work/checkpoints || true
 
 # 7. tmux 시작
 tmux new-session -d -s main "bash -l"
@@ -132,11 +139,9 @@ echo "Bootstrap complete. Attach via: tmux attach -t main"
 
 ### 3.2 secrets 관리
 
-비밀 키는 절대 git에 커밋 금지. 다음 둘 중 하나:
-- (A) vast.ai env vars (`-e RCLONE_CONF_BASE64=...`) → on-start에서 디코드 후 파일로
-- (B) 사용자가 ssh 직후 수동으로 `~/.config/rclone/rclone.conf` 붙여넣기 (tmux 안에서)
-
-권장: (A). 사용자가 1회 base64 인코딩한 값을 vast.ai 인스턴스 환경변수로 넣어둠.
+비밀 키는 절대 git에 커밋 금지. 권장: vast.ai env vars로 다음 둘만 주입.
+- `HF_TOKEN` — HuggingFace Hub write 토큰
+- (선택) `GIT_USER_NAME`, `GIT_USER_EMAIL` — git 커밋 author
 
 ---
 
@@ -228,10 +233,11 @@ done
 ### 6.2 인스턴스 종료 → 새 인스턴스에서 재개
 
 1. 새 인스턴스 spin-up (동일 image)
-2. on-start 스크립트가 자동으로 `rclone sync r2:aic-ckpts/latest/` 풀
-3. `scripts/train_with_resume.sh` 실행 → 직전 epoch부터 재개
+2. on-start 스크립트가 자동으로 `huggingface-cli download nggw519/aic-ckpts` 풀
+3. `scripts/train_with_resume.sh` 실행 → 직전 ckpt에서 재개
 
-손실: 마지막 1분 이내 작업 (rclone 동기화 주기).
+손실: 마지막 ckpt 이후 작업 (`ckpt_every` 단위, 기본 5,000 step ≈ 25분).
+더 짧은 손실을 원하면 `ckpt_every`를 줄이되 push 빈도와의 trade-off 고려.
 
 ---
 
@@ -273,9 +279,9 @@ idle 시간 > 30분이면 자동 정지 cron (옵션):
 ## 9. 체크리스트 (이 문서가 끝났을 때 갖추어져야 함)
 
 - [ ] vast.ai 계정 + 잔고 충전
-- [ ] Cloudflare R2 (또는 AWS S3) 버킷 1개 생성 — 이름: `aic-ckpts`
-- [ ] R2 access key를 vast.ai env var로 등록 (`R2_ACCESS_KEY`, `R2_SECRET_KEY`)
-- [ ] HuggingFace Hub private repo 1개 생성 — 데이터셋 백업용
+- [ ] HuggingFace Hub 토큰 발급 (write 권한) → `HF_TOKEN`
+- [ ] HF private repo 2개 생성: `nggw519/aic-ckpts` (model) + `nggw519/aic-datasets` (dataset)
+- [ ] HF_TOKEN을 vast.ai env var로 등록
 - [ ] `aic_work/docker/dev.Dockerfile` 작성 + ghcr.io에 push
 - [ ] `aic_work/scripts/onstart.sh` 작성 + vast.ai 템플릿에 등록
 - [ ] 첫 인스턴스 띄워 5분 내 `pixi run colcon build` 통과 확인

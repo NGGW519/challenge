@@ -20,6 +20,7 @@
 5. **vast.ai 비용 무제한** — 시간이 더 비싸다. idle 인스턴스만 정지.
 6. **돈 들지 않는 로컬 작업을 먼저** — 인스턴스 spin-up이나 ECR push처럼 외부 의존이 큰 작업은 사용자 동의 후.
 7. **커밋 메시지는 한국어 한 줄, Claude attribution 없음.** `Co-Authored-By` 트레일러 금지. push는 보통 사용자가 직접.
+8. **백업은 HuggingFace Hub 단독.** R2/S3 안 씀 (2026-05-10 결정). ckpt repo `nggw519/aic-ckpts`, dataset repo `nggw519/aic-datasets` (둘 다 private).
 
 ---
 
@@ -99,10 +100,9 @@ STRICT=1 bash scripts/audit_pre_submit.sh
 ## 사용자가 별도 준비해야 하는 자원 (대기 중)
 
 `reports/2026-05-10.md` §5 참조. 요약:
-1. vast.ai 계정 + 잔고
-2. Cloudflare R2 bucket + access key
-3. HuggingFace Hub token + private repo
-4. AWS ECR 자격증명 (조직 측 이메일)
-5. 제출 포털 자격증명
+1. vast.ai 계정 + 잔고 (**유일한 유료**)
+2. HuggingFace Hub token + private repo 2개 (`aic-ckpts`, `aic-datasets`)
+3. AWS ECR 자격증명 (조직 측 이메일, Phase 8 직전에만 필요)
+4. 제출 포털 자격증명
 
-`#1+#2+#3` 이 들어오면 학습/데이터 작업 즉시 시작 가능.
+`#1 + #2` 가 들어오면 학습/데이터 작업 즉시 시작 가능.

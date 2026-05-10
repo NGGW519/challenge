@@ -3,15 +3,18 @@
 # vast.ai console > Instance > Edit Image Config > On-start script 에 등록하거나,
 # ssh 직후 수동으로 한 번 실행.
 #
-# 가정: image = ghcr.io/nggw519/aic-dev:latest (curl, git, pixi, rclone, aws 포함)
+# 가정: image = ghcr.io/nggw519/aic-dev:latest (curl, git, pixi, huggingface-cli, aws 포함)
 # 환경변수 (vast.ai env 또는 .env 파일):
-#   R2_ACCESS_KEY, R2_SECRET_KEY, R2_ENDPOINT, R2_BUCKET     — Cloudflare R2
-#   HF_TOKEN                                                  — HuggingFace
-#   GIT_USER_NAME, GIT_USER_EMAIL                              — git 커밋 author (선택)
+#   HF_TOKEN                 — HuggingFace Hub write 토큰 (필수)
+#   HF_CKPT_REPO             — ckpt repo (기본 nggw519/aic-ckpts)
+#   HF_DATASET_REPO          — dataset repo (기본 nggw519/aic-datasets)
+#   GIT_USER_NAME, GIT_USER_EMAIL  — git 커밋 author (선택)
 
 set -euo pipefail
 
 WORKDIR=/workspace
+HF_CKPT_REPO="${HF_CKPT_REPO:-nggw519/aic-ckpts}"
+HF_DATASET_REPO="${HF_DATASET_REPO:-nggw519/aic-datasets}"
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
@@ -31,45 +34,34 @@ if [[ -n "${GIT_USER_NAME:-}" ]]; then
   git -C aic_work config user.email "${GIT_USER_EMAIL:-noreply@example.com}"
 fi
 
-# 3. rclone 설정 (R2)
-if [[ -n "${R2_ACCESS_KEY:-}" ]]; then
-  mkdir -p ~/.config/rclone
-  cat > ~/.config/rclone/rclone.conf <<EOF
-[r2]
-type = s3
-provider = Cloudflare
-access_key_id = ${R2_ACCESS_KEY}
-secret_access_key = ${R2_SECRET_KEY}
-endpoint = ${R2_ENDPOINT}
-acl = private
-EOF
-  echo "[onstart] rclone configured"
-else
-  echo "[onstart] WARN: R2_ACCESS_KEY not set — skipping rclone setup"
-fi
-
-# 4. HuggingFace login
+# 3. HuggingFace login (R2 대신 HF Hub 단독 백업)
 if [[ -n "${HF_TOKEN:-}" ]]; then
   huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
   echo "[onstart] huggingface login ok"
+else
+  echo "[onstart] WARN: HF_TOKEN not set — ckpt push/pull will be skipped"
 fi
 
-# 5. Pixi 환경 준비 (aic 토킷 기반)
+# 4. Pixi 환경 준비 (aic 토킷 기반)
 cd "$WORKDIR/aic"
 if ! pixi info >/dev/null 2>&1; then
   pixi install --frozen
 fi
 
-# 6. aic_work Python deps (옵션 — Pixi 외부, dev 작업용)
+# 5. aic_work Python deps (옵션 — Pixi 외부, dev 작업용)
 cd "$WORKDIR/aic_work"
-pip install --no-cache-dir -e .[train,dev] 2>/dev/null || echo "[onstart] WARN: pip install partial (이건 ROS 환경 안 들어가도 OK)"
+pip install --no-cache-dir -e .[train,dev] 2>/dev/null || \
+    echo "[onstart] WARN: pip install partial (이건 ROS 환경 안 들어가도 OK)"
 
-# 7. 최신 ckpt 풀 (있다면)
-if [[ -n "${R2_BUCKET:-}" ]]; then
-  rclone sync "r2:${R2_BUCKET}/latest/" "$WORKDIR/aic_work/checkpoints/" --progress || true
+# 6. 최신 ckpt 풀 (있으면)
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  mkdir -p "$WORKDIR/aic_work/checkpoints"
+  huggingface-cli download --repo-type=model "$HF_CKPT_REPO" \
+      --local-dir "$WORKDIR/aic_work/checkpoints" 2>/dev/null \
+    || echo "[onstart] no ckpts in $HF_CKPT_REPO yet (first run)"
 fi
 
-# 8. tmux 세션 미리 띄우기 (사용자가 ssh 후 attach)
+# 7. tmux 세션 미리 띄우기 (사용자가 ssh 후 attach)
 if ! tmux has-session -t main 2>/dev/null; then
   tmux new-session -d -s main -n shell -c "$WORKDIR/aic_work" "bash -l"
   tmux new-window  -t main   -n train -c "$WORKDIR/aic_work" "bash -l"

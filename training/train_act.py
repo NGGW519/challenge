@@ -10,13 +10,16 @@
 
 실 학습 (인스턴스 안에서):
     python3 training/train_act.py \
-        --repo_id   nggw519/aic_v0 \
+        --repo_id      nggw519/aic_v0 \
         --dataset_root datasets/aic_v0 \
         --output_dir   models/act_v1 \
         --steps        200000 \
         --batch_size   32 \
         --lr           1e-4 \
-        --remote       r2:aic-ckpts/act_v1/
+        --remote       hf://nggw519/aic-ckpts/act_v1
+
+remote 형식: `hf://<repo_id>/<path_in_repo>` — HuggingFace Hub model repo로 push.
+미지정 시 push 생략 (로컬에만 저장).
 
 LeRobot 0.2x API에 맞춤. 실제 버전 차이 시 ACTConfig / select_action 호출
 시그니처를 그에 맞춰 조정해야 한다 (LeRobot CHANGELOG 확인).
@@ -26,8 +29,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -50,23 +51,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--log_every", type=int, default=100)
     p.add_argument("--resume", action="store_true")
     p.add_argument("--remote", default=None,
-                   help="rclone 원격 (예: r2:aic-ckpts/act_v1/). 미지정 시 push 생략.")
+                   help="HF Hub 원격 (예: hf://nggw519/aic-ckpts/act_v1). 미지정 시 push 생략.")
     p.add_argument("--smoke", action="store_true",
                    help="import만 확인하고 종료 — 의존성 사전 점검용.")
     return p.parse_args(argv)
 
 
-def push_ckpt(local: Path, remote: str | None) -> None:
+def _parse_hf_remote(remote: str) -> tuple[str, str]:
+    """`hf://<repo_id>/<path_in_repo>` → (repo_id, path_in_repo).
+
+    repo_id는 `org/name` 형식이라 항상 슬래시 1개를 포함한다.
+    """
+    if not remote.startswith("hf://"):
+        raise ValueError(f"remote must start with 'hf://': {remote}")
+    body = remote[len("hf://"):]
+    parts = body.split("/")
+    if len(parts) < 2:
+        raise ValueError(f"remote repo_id must be 'org/name': {remote}")
+    repo_id = "/".join(parts[:2])
+    path_in_repo = "/".join(parts[2:]) or "."
+    return repo_id, path_in_repo
+
+
+def push_ckpt(local: Path, remote: str | None, commit_message: str = "") -> None:
+    """local 디렉토리(또는 파일)를 HuggingFace Hub repo로 업로드."""
     if not remote:
         return
-    if shutil.which("rclone") is None:
-        logger.warning("rclone not found — skip push")
-        return
-    cmd = ["rclone", "copy", str(local), remote, "--progress"]
     try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        logger.error("rclone push failed: %s", e)
+        from huggingface_hub import HfApi
+    except ImportError:
+        logger.warning("huggingface_hub not installed — skip push")
+        return
+    try:
+        repo_id, path_in_repo = _parse_hf_remote(remote)
+        api = HfApi()
+        if local.is_dir():
+            api.upload_folder(
+                repo_id=repo_id,
+                folder_path=str(local),
+                path_in_repo=path_in_repo,
+                repo_type="model",
+                commit_message=commit_message or f"upload {local.name}",
+            )
+        else:
+            api.upload_file(
+                repo_id=repo_id,
+                path_or_fileobj=str(local),
+                path_in_repo=f"{path_in_repo}/{local.name}",
+                repo_type="model",
+                commit_message=commit_message or f"upload {local.name}",
+            )
+        logger.info("pushed %s → %s/%s", local.name, repo_id, path_in_repo)
+    except Exception as e:
+        logger.error("HF Hub push failed: %s", e)
 
 
 def _build_config(ds_features: dict, image_keys: list[str], state_dim: int, action_dim: int):
@@ -183,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 ckpt,
             )
             logger.info("saved ckpt %s", ckpt.name)
-            push_ckpt(ckpt, args.remote)
+            push_ckpt(ckpt, args.remote, commit_message=f"step {step}")
 
     final = out / "final.pt"
     torch.save(
@@ -192,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         final,
     )
     logger.info("training done — saved %s", final)
-    push_ckpt(out, args.remote)
+    push_ckpt(out, args.remote, commit_message=f"final step {args.steps}")
     return 0
 
 

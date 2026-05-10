@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # vast.ai 인스턴스가 갑자기 죽어도 자동 재개되는 학습 wrapper.
-# 매 epoch end마다 ckpt를 R2에 push하고, crash 시 sleep 후 재시도.
+# 매 ckpt마다 HF Hub로 push하고, crash 시 sleep 후 재시도.
 #
 # 사용:
 #   bash scripts/train_with_resume.sh act      # ACT 학습
 #   bash scripts/train_with_resume.sh yolo     # 포트 검출
+#
+# 환경변수:
+#   HF_CKPT_REPO   — model repo (기본 nggw519/aic-ckpts)
+#   HF_TOKEN       — onstart.sh에서 이미 login되어 있으면 생략 가능
 
 set -euo pipefail
 
 WHAT="${1:?usage: train_with_resume.sh <act|yolo>}"
+HF_REPO="${HF_CKPT_REPO:-nggw519/aic-ckpts}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOGDIR="${ROOT}/logs/train"
 mkdir -p "$LOGDIR"
@@ -17,7 +22,9 @@ case "$WHAT" in
   act)
     CMD=(python3 "${ROOT}/training/train_act.py" --resume \
           --output_dir "${ROOT}/models/act_v1" \
-          --remote "r2:${R2_BUCKET:-aic-ckpts}/act_v1/")
+          --remote "hf://${HF_REPO}/act_v1")
+    SUBPATH="act_v1"
+    LOCAL="${ROOT}/models/act_v1"
     ;;
   yolo)
     CMD=(yolo train \
@@ -27,6 +34,8 @@ case "$WHAT" in
           project="${ROOT}/models/port_detector_v1" \
           name=run0 \
           resume=true)
+    SUBPATH="port_detector_v1"
+    LOCAL="${ROOT}/models/port_detector_v1"
     ;;
   *)
     echo "unknown: $WHAT" >&2; exit 2 ;;
@@ -46,10 +55,11 @@ while true; do
   sleep 30
 done
 
-# 최종 ckpt 백업
-if [[ -n "${R2_BUCKET:-}" ]]; then
-  case "$WHAT" in
-    act)  rclone copy "${ROOT}/models/act_v1/" "r2:${R2_BUCKET}/act_v1/" --progress ;;
-    yolo) rclone copy "${ROOT}/models/port_detector_v1/" "r2:${R2_BUCKET}/port_detector_v1/" --progress ;;
-  esac
+# 최종 ckpt 백업 (학습 스크립트가 매 ckpt push했지만 종합본도 한 번 더)
+if [[ -d "$LOCAL" ]] && command -v huggingface-cli >/dev/null 2>&1; then
+  echo "[train] final upload to hf://${HF_REPO}/${SUBPATH}"
+  huggingface-cli upload "$HF_REPO" "$LOCAL" "$SUBPATH" \
+      --repo-type=model \
+      --commit-message="final ${WHAT} ${TS}" || \
+      echo "[train] WARN: final upload failed (학습 자체는 성공)"
 fi

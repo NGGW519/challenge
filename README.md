@@ -22,7 +22,7 @@ aic_work/
 ```
 
 `datasets/`, `models/`, `logs/`, `aic_results/`는 git ignore. 큰 파일은
-Cloudflare R2 또는 HuggingFace Hub에 보관 (`strategy/02_vastai_setup.md` 참조).
+HuggingFace Hub에 보관 (`strategy/02_vastai_setup.md` 참조).
 
 ## 빠른 시작 (vast.ai 인스턴스 부팅 후)
 
@@ -63,9 +63,8 @@ ls logs/baseline/CheatCode/summary.csv
 
 코드만으로는 부족하고, 사용자가 직접 셋업해야 하는 것 ([02_vastai_setup.md](strategy/02_vastai_setup.md) §9 체크리스트):
 
-- [ ] vast.ai 계정 + 잔고 충전
-- [ ] Cloudflare R2 (또는 AWS S3) 버킷 1개 (이름 예: `aic-ckpts`)
-- [ ] R2 access key → vast.ai env var (`R2_ACCESS_KEY`, `R2_SECRET_KEY`)
-- [ ] HuggingFace Hub 계정 + private repo (데이터셋/가중치 백업)
-- [ ] AWS ECR 자격증명 (조직 측 온보딩 이메일에서)
+- [ ] vast.ai 계정 + 잔고 충전 (**유일한 유료 항목**)
+- [ ] HuggingFace Hub 토큰 (write 권한) → vast.ai env var `HF_TOKEN`
+- [ ] HF private repo 2개: `nggw519/aic-ckpts` (model) + `nggw519/aic-datasets` (dataset)
+- [ ] AWS ECR 자격증명 (조직 측 온보딩 이메일에서, Phase 8 직전에만 필요)
 - [ ] 제출 포털 계정 / URL 확인
