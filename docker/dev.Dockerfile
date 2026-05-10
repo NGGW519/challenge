@@ -10,7 +10,7 @@
 #   - On-Demand instance, image: ghcr.io/nggw519/aic-dev:latest
 #   - On-start cmd: bash /workspace/aic_work/scripts/onstart.sh
 
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu24.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8

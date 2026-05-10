@@ -22,14 +22,14 @@
 
 ```
 GPU: RTX 4090 / L40S / A100 80GB / L4
-CUDA: 12.1+ (ROS 2 Kilted Pixi env과 호환)
+CUDA: 12.4+ (ROS 2 Kilted Pixi env과 호환)
 DLPerf: ≥ 30 (4090 기준)
 Disk: ≥ 200 GB
 RAM: ≥ 64 GB (Gazebo + ROS 2 + Pixi)
 Inet up/down: ≥ 200 Mbps
 Reliability: ≥ 0.99
 Price/Hour: 무제한 (정렬은 dlperf/$)
-Image: nvidia/cuda:12.1.1-cudnn-devel-ubuntu24.04
+Image: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04   # ← Ubuntu 24.04 + CUDA 12.1 조합은 공식 태그 없음
 On-demand interruptible? On-demand 권장 (학습은 짤리면 손해)
 ```
 
@@ -154,7 +154,7 @@ vast.ai 인스턴스에 ROS 2 + 의존성을 매번 설치하지 말고, 미리 
 `/home/nggw/challenge/aic_work/docker/dev.Dockerfile`로 작성:
 
 ```dockerfile
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu24.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIXI_HOME=/opt/pixi
