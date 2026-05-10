@@ -34,6 +34,18 @@ apt-get install -y -q --no-install-recommends \
 pip install --no-cache-dir --quiet 'huggingface_hub>=1.0' \
   || echo "[onstart] WARN: huggingface_hub install failed"
 
+# Pixi (ROS 2 Kilted + Gazebo + Python deps 일괄 관리)
+if ! command -v pixi >/dev/null 2>&1; then
+  curl -fsSL https://pixi.sh/install.sh | bash -s -- --no-modify-path
+  export PATH="$HOME/.pixi/bin:$PATH"
+  # 이후 SSH 세션에서도 자동 인식되도록 .bashrc에 추가 (중복 방지)
+  if ! grep -q '\.pixi/bin' ~/.bashrc 2>/dev/null; then
+    echo 'export PATH="$HOME/.pixi/bin:$PATH"' >> ~/.bashrc
+  fi
+fi
+# 어쨌든 현재 셸 PATH에 추가 (set -e 안전)
+export PATH="$HOME/.pixi/bin:$PATH"
+
 # 1. 토킷 + 작업 저장소 clone
 if [[ ! -d aic ]]; then
   git clone https://github.com/intrinsic-dev/aic.git aic
