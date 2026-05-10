@@ -130,7 +130,8 @@ def _sample_filler_mounts(rng: random.Random) -> dict:
 
 
 def build_trial(scenario: str, seed: int, base_path: Path, grip_jitter: float = 0.002) -> dict:
-    rng = random.Random(seed)
+    # 시나리오를 seed에 섞어, 같은 seed로 sfp1/sfp2/sc가 다른 결과를 내도록.
+    rng = random.Random(hash((scenario, seed)) & 0xFFFFFFFF)
     base = yaml.safe_load(base_path.read_text())
 
     trial_key = {"sfp1": "trial_1", "sfp2": "trial_2", "sc": "trial_3"}[scenario]

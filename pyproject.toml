@@ -63,4 +63,14 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
-ignore = ["E501"]
+# E501: long line (의도적 긴 docstring/주석)
+# E701/E702: 같은 줄 statement (의도적 컴팩트 — `if x is None: return None` 등)
+# E741: 'l' ambiguous (좌/우 카메라 변수에서 자연스러운 약어)
+# RUF002: 한국어 docstring의 × 같은 모호 문자 (의도적)
+# RUF003: 한국어 주석의 모호 문자
+ignore = ["E501", "E701", "E702", "E741", "RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["aic_model_pkg", "."]

@@ -11,11 +11,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${ROOT}/aic_model_pkg/"
 FAIL=0
 
+STRICT="${STRICT:-0}"  # 1 = 제출 직전 모드 (weights 파일 누락도 fail)
+
 section() { printf "\n== %s ==\n" "$1"; }
+# .py 파일만 검사 (xml/md docstring/schema URL은 제외)
 check_clean() {
   local label="$1"; shift
   local found
-  if found=$(grep -rEn "$@" "$SRC" 2>/dev/null); then
+  if found=$(grep -rEn --include='*.py' "$@" "$SRC" 2>/dev/null); then
     if [[ -n "$found" ]]; then
       printf "  ❌ FOUND:\n%s\n" "$found"
       FAIL=1
@@ -59,12 +62,19 @@ if [[ -d "$WEIGHTS_DIR" ]]; then
     printf "  ✅ weights:\n"
     for f in "${files[@]}"; do printf "     %s (%s)\n" "$f" "$(du -h "$f" | cut -f1)"; done
   else
-    printf "  ⚠️  no weight files in %s — submit container will be useless\n" "$WEIGHTS_DIR"
-    FAIL=1
+    if [[ "$STRICT" == "1" ]]; then
+      printf "  ❌ no weight files in %s — submit container will be useless\n" "$WEIGHTS_DIR"
+      FAIL=1
+    else
+      printf "  ℹ️  no weight files in %s yet (run with STRICT=1 to fail before submission)\n" "$WEIGHTS_DIR"
+    fi
   fi
 else
-  printf "  ⚠️  weights directory missing: %s\n" "$WEIGHTS_DIR"
-  FAIL=1
+  if [[ "$STRICT" == "1" ]]; then
+    printf "  ❌ weights directory missing: %s\n" "$WEIGHTS_DIR"; FAIL=1
+  else
+    printf "  ℹ️  weights directory missing: %s (placeholder ok before training)\n" "$WEIGHTS_DIR"
+  fi
 fi
 
 section "Dockerfile sanity"

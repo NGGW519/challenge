@@ -1,0 +1,22 @@
+# YOLOv8 dataset config for SFP/SC port detector (Phase 4).
+# Layout (생성: data/auto_label_ports.py):
+#   datasets/port_detection/
+#     ├── images/{train,val,test}/*.jpg
+#     ├── labels/{train,val,test}/*.txt   # YOLO format: cls cx cy w h (정규화)
+#     └── README.md
+path: /workspace/aic_work/datasets/port_detection
+train: images/train
+val:   images/val
+test:  images/test
+
+nc: 6
+names:
+  0: sfp_port
+  1: sc_port
+  2: sfp_plug
+  3: sc_plug
+  4: nic_card
+  5: enclosure_edge
+
+# 학습 hyperparameter (yolo train 명령에서 직접 지정해도 됨)
+# yolo train model=yolov8m.pt data=training/yolov8_port.yaml ...

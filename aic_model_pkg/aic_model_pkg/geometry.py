@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 try:  # ROS 환경이면 cv2 / transforms3d 사용 가능
-    import cv2  # noqa: F401
+    import cv2
 except Exception:  # pragma: no cover
     cv2 = None  # type: ignore[assignment]
 

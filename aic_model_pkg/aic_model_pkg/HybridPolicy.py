@@ -45,7 +45,7 @@ T_STAGE_C = 15.0
 
 
 class HybridPolicy(Policy):
-    def __init__(self, parent_node):  # noqa: D401
+    def __init__(self, parent_node):
         super().__init__(parent_node)
         self.logger = logging.getLogger("HybridPolicy")
         self.detector = PortDetector(DETECTOR_CKPT if DETECTOR_CKPT.exists() else None)
@@ -57,14 +57,14 @@ class HybridPolicy(Policy):
     # ------------------------------------------------------------------ #
     # entry point
     # ------------------------------------------------------------------ #
-    def insert_cable(self, task, get_observation, move_robot, send_feedback):  # noqa: D401
+    def insert_cable(self, task, get_observation, move_robot, send_feedback):
         """aic_model이 호출하는 진입점. blocking, 작업 완료까지."""
         try:
             send_feedback("hybrid: starting")
             self._start_watchdog(get_observation)
 
             # ----- Stage A: coarse visual approach -----
-            ok_a = self._stage_a(task, get_observation, move_robot, send_feedback)
+            self._stage_a(task, get_observation, move_robot, send_feedback)
 
             # ----- Stage B: ACT alignment -----
             self._stage_b(task, get_observation, move_robot, send_feedback)
