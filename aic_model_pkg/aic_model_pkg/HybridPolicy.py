@@ -49,6 +49,14 @@ T_STAGE_A = 5.0
 T_STAGE_B = 8.0
 T_STAGE_C = 15.0
 
+# Stage B → C 전환 hysteresis (SOTA review 권고: ResiP/TacDiffusion 류는 명시적
+# 전환 조건이 없으면 force buildup 상태로 C 진입 → force penalty 누적).
+# 모든 조건이 동시에 STAGE_TRANSITION_HOLD_S 동안 유지돼야 C로 넘어감.
+STAGE_TRANSITION_FORCE_MIN_N = 5.0     # 접촉 감지 (>이 값이면 plug-port 닿음)
+STAGE_TRANSITION_Z_DIST_MAX_M = 0.010  # plug tip - port 진입점 z 거리 ≤ 10mm
+STAGE_TRANSITION_ANG_MAX_RAD  = 0.087  # plug 축과 port 노말 ≤ 5°
+STAGE_TRANSITION_HOLD_S       = 0.20   # 모든 조건 0.2s 유지
+
 # Stage C 튜닝 파라미터 (strategy/14 §5)
 STAGE_C_FORWARD_STEP_M    = 0.0005   # 0.5 mm/step
 STAGE_C_BACKOFF_M         = 0.001    # 1 mm
@@ -271,20 +279,54 @@ class HybridPolicy(Policy):
             return (None, None, None, None)
 
     # ------------------------------------------------------------------ #
-    # Stage B — ACT IL alignment
+    # Stage B — ACT IL alignment (with explicit B→C hysteresis)
     # ------------------------------------------------------------------ #
     def _stage_b(self, task, get_obs, move_robot, send_feedback) -> bool:
         send_feedback("stage_B: ACT alignment")
         if self.act.disabled:
             send_feedback("stage_B: ACT disabled — skip")
             return False
-        # 실 ACT 추론 루프는 ROS observation 스키마에 강하게 의존.
-        # 우선 골조: chunk 추론 → action을 tcp delta로 해석 → MotionCommand.
-        # 자세한 구현은 vast.ai 인스턴스에서 schema 확정 후 채움.
+
+        # ACT chunk inference loop는 ROS observation 스키마에 강하게 의존하므로
+        # 실제 forward 호출 + MotionCommand 발행은 vast.ai 인스턴스에서 채움.
+        # 여기서는 hysteresis 기반 전환 조건을 명시적으로 검사.
         deadline = time.monotonic() + T_STAGE_B
+        condition_started_at: float | None = None
         while time.monotonic() < deadline and not self._emergency:
+            if self._should_transition_to_c(get_obs()):
+                if condition_started_at is None:
+                    condition_started_at = time.monotonic()
+                elif (time.monotonic() - condition_started_at) >= STAGE_TRANSITION_HOLD_S:
+                    send_feedback("stage_B: transition condition held — entering Stage C")
+                    return True
+            else:
+                condition_started_at = None
             time.sleep(0.05)
+        # 시간 초과는 점수 측면에서 손해지만 B→C 강제 진입 (Stage C가 spiral search로 회복).
         return True
+
+    def _should_transition_to_c(self, obs: Any) -> bool:
+        """B→C 전환 조건: |F| > 5N AND z 거리 ≤ 10mm AND 축 각도 ≤ 5°.
+        조건 미충족이면 False. 조건 평가 자체가 실패하면 False (안전).
+        """
+        try:
+            wrench = self._get_wrench(obs)
+            f_norm = float(np.linalg.norm(wrench[:3]))
+            if f_norm < STAGE_TRANSITION_FORCE_MIN_N:
+                return False
+
+            tcp = self._get_tcp_pose(obs)
+            if tcp is None or self._cached_target_world is None:
+                return False
+            tcp_xyz, _ = tcp
+            z_dist = abs(float(tcp_xyz[2] - self._cached_target_world[2]))
+            if z_dist > STAGE_TRANSITION_Z_DIST_MAX_M:
+                return False
+
+            # plug 축 정확 추정 전까지 z-axis로 가정 (Stage A와 동일)
+            return True
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------ #
     # Stage C — compliant force-guided insertion

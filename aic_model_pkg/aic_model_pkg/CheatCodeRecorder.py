@@ -39,6 +39,25 @@ except Exception:
 
 # 기록 대상 토픽 — sample_config.yaml의 scoring.topics 와 정합되게.
 # (cable_type 등 task 메타는 별도 task.yaml로 저장)
+# Reference profile (SOTA 권고 #1 Comp-ACT 데이터 호환성).
+# Phase 3에서 ACT v2 학습 시 이 reference를 stiffness/wrench head의 target으로 사용.
+# CheatCode가 trajectory 단계별로 어떤 stiffness/desired wrench를 "의도했는지" 기록.
+REFERENCE_PROFILE: dict[str, dict[str, list[float]]] = {
+    "approach": {                    # z_offset > 0.05 m (포트 위 5cm 이상)
+        "stiffness":      [300.0, 300.0, 300.0, 30.0, 30.0, 30.0],
+        "desired_wrench": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    },
+    "alignment": {                   # 0 ≤ z_offset ≤ 0.05 m (정렬 단계)
+        "stiffness":      [500.0, 500.0, 800.0, 50.0, 50.0, 80.0],
+        "desired_wrench": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    },
+    "insertion": {                   # z_offset < 0 m (삽입 진행)
+        "stiffness":      [800.0, 800.0, 1500.0, 80.0, 80.0, 150.0],
+        "desired_wrench": [0.0, 0.0, 5.0, 0.0, 0.0, 0.0],  # +5N forward
+    },
+}
+
+
 RECORDED_TOPICS: tuple[tuple[str, str], ...] = (
     ("/joint_states",                    "sensor_msgs/msg/JointState"),
     ("/fts_broadcaster/wrench",          "geometry_msgs/msg/WrenchStamped"),
@@ -109,7 +128,9 @@ class CheatCodeRecorder(CheatCode):
         bag_root = Path(bag_dir)
         bag_root.mkdir(parents=True, exist_ok=True)
 
-        # task 메타데이터 저장 (post-hoc episode → task_index 매칭)
+        # task 메타데이터 + reference profile 저장 (post-hoc 학습용).
+        # bag_to_lerobot.py가 이 reference를 stage-별 라벨로 변환해
+        # action.stiffness, action.desired_wrench 채널을 만들 수 있다.
         meta = {
             "cable_type":         getattr(task, "cable_type", ""),
             "cable_name":         getattr(task, "cable_name", ""),
@@ -118,6 +139,7 @@ class CheatCodeRecorder(CheatCode):
             "port_type":          getattr(task, "port_type", ""),
             "port_name":          getattr(task, "port_name", ""),
             "target_module_name": getattr(task, "target_module_name", ""),
+            "reference_profile":  REFERENCE_PROFILE,
         }
         (bag_root / "task.yaml").write_text(yaml.dump(meta, sort_keys=False))
 

@@ -38,10 +38,17 @@ class Detection:
         return CLASS_NAMES[self.cls] if 0 <= self.cls < len(CLASS_NAMES) else f"cls{self.cls}"
 
 
+# Tier 3 잘못된 포트(-12) 방어 — SOTA review 권고에 따라 conservative threshold.
+DEFAULT_CONF_THRESHOLD = 0.85
+# Stereo geometry consistency: left/right 매칭 시 epipolar y 차이 허용치 (px)
+EPIPOLAR_Y_TOL_PX = 8.0
+
+
 class PortDetector:
     """YOLOv8 wrapper. 가중치 누락 시 disabled=True."""
 
-    def __init__(self, weights_path: str | Path | None = None, device: str = "cuda", conf: float = 0.4) -> None:
+    def __init__(self, weights_path: str | Path | None = None, device: str = "cuda",
+                 conf: float = DEFAULT_CONF_THRESHOLD) -> None:
         self.disabled = True
         self._model = None
         self.device = device
@@ -98,7 +105,22 @@ class PortDetector:
         if not left_targets or not right_targets:
             return None
 
-        # 가장 confident한 한 쌍부터. epipolar 검증은 나중에 추가.
-        l = max(left_targets,  key=lambda d: d.conf)
-        r = max(right_targets, key=lambda d: d.conf)
+        # Stereo consistency: epipolar y(같은 horizontal line) 차이가 작은 쌍 우선.
+        # left/right 카메라가 수평으로 배치되어 있다고 가정 → 같은 y 좌표.
+        best_pair: tuple[Detection, Detection] | None = None
+        best_score = float("inf")
+        for l in left_targets:
+            for r in right_targets:
+                dy = abs(l.center[1] - r.center[1])
+                if dy > EPIPOLAR_Y_TOL_PX:
+                    continue
+                # 점수 = epipolar 차이 - confidence 합 (작을수록 좋음)
+                score = dy - 10.0 * (l.conf + r.conf)
+                if score < best_score:
+                    best_score = score
+                    best_pair = (l, r)
+
+        if best_pair is None:
+            return None  # consistent 매칭 실패 — 잘못된 포트 위험 회피
+        l, r = best_pair
         return G.triangulate_two_views(l.center, r.center, K_left, T_world_left, K_right, T_world_right)
