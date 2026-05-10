@@ -143,11 +143,12 @@ def run_episode_via_compose(ep_dir: Path, scene_yaml: Path, args: argparse.Names
         "AIC_GROUND_TRUTH":   args.ground_truth,
         "AIC_RESULTS_DIR":    str(ep_dir),
         "AIC_TRIAL_CONFIG":   str(scene_yaml),
+        "AIC_EP_DIR":         str(ep_dir),
     })
     compose_args = [
         "docker", "compose",
         "-f", "/workspace/aic/docker/docker-compose.yaml",
-        "-f", str(ROOT / "docker" / "baseline-override.yaml"),
+        "-f", str(ROOT / "docker" / "collect-override.yaml"),
     ]
     up = [*compose_args, "up", "--abort-on-container-exit",
           "--exit-code-from", "eval", "eval", "model"]

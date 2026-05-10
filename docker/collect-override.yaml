@@ -1,0 +1,43 @@
+# 데이터 수집(Phase 2) 전용 override.
+# baseline-override보다 다음이 다름:
+#   - 기본 정책: aic_model_pkg.CheatCodeRecorder
+#   - ground_truth=true (CheatCode가 정확한 trajectory를 만들기 위해 필수)
+#   - AIC_RECORD_BAG_DIR 환경변수로 mcap 출력 경로 주입
+#   - host volume mount로 bag이 호스트 ep_dir에 보이도록
+#
+# 사용:
+#   AIC_EP_DIR=/workspace/aic_work/raw_episodes/ep_000123 \
+#   AIC_TRIAL_CONFIG=$AIC_EP_DIR/scene.yaml \
+#   docker compose \
+#     -f /workspace/aic/docker/docker-compose.yaml \
+#     -f /workspace/aic_work/docker/collect-override.yaml \
+#     up --abort-on-container-exit --exit-code-from eval eval model
+
+name: aic
+services:
+  eval:
+    command: >
+      gazebo_gui:=false
+      launch_rviz:=false
+      ground_truth:=true
+      start_aic_engine:=true
+      shutdown_on_aic_engine_exit:=true
+      model_discovery_timeout_seconds:=600
+    volumes:
+      - ${AIC_EP_DIR:-./aic_results}:/root/aic_results
+
+  model:
+    image: ghcr.io/nggw519/aic-dev:latest
+    command: >
+      bash -lc "source /workspace/aic/install/setup.bash 2>/dev/null || true;
+                pixi --manifest-path /workspace/aic/pixi.toml run
+                ros2 run aic_model aic_model
+                  -p policy:=aic_model_pkg.CheatCodeRecorder
+                  -p use_sim_time:=true"
+    volumes:
+      - /home/nggw/challenge/aic:/workspace/aic:ro
+      - /home/nggw/challenge/aic_work:/workspace/aic_work
+      - ${AIC_EP_DIR}:/ep_dir
+    environment:
+      AIC_RECORD_BAG_DIR: /ep_dir
+      AIC_TRIAL_CONFIG:   ${AIC_TRIAL_CONFIG}
