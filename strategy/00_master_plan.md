@@ -1,10 +1,12 @@
 # AIC 챌린지 — 280+/300 마스터 전략
 
 > 목표: **3개 trial 평균 ≥ 93.3점, 즉 최소 280점 (이상적으로 285~290+)**
-> 작업자: 1인 (단독)
-> 인프라: vast.ai 클라우드 GPU
+> 작업자: **1인 단독** (팀원 없음)
+> 인프라: **vast.ai 클라우드 GPU** (예산 제약 없음 — 필요시 즉시 인스턴스 spin-up)
+> 마감일: **변경됨** — 일정 페이스보다 품질 우선. 이 문서의 "예상 기간"은 단순 작업량 추정일뿐 실제 deadline과 무관.
 > 작업 디렉토리: `/home/nggw/challenge/aic_work/`
-> 토킷 원본: `/home/nggw/challenge/aic/` (수정 금지, 읽기만)
+> 토킷 원본: `/home/nggw/challenge/aic/` (수정 금지, 읽기 전용 참조)
+> 원격 백업: `https://github.com/NGGW519/challenge.git` (브랜치 `main`)
 
 ---
 
@@ -109,15 +111,35 @@
 
 ---
 
-## 6. 다른 문서 인덱스 (이 디렉토리 내)
+## 6. 평가 환경 핵심 수치 (출처: aic/docs)
 
-- `01_agent_team.md` — Sub-agent 별 역할 분담
-- `02_vastai_setup.md` — 클라우드 인프라 설정
-- `10_phase1_baseline.md` — Baseline 재현
-- `11_phase2_data_collection.md` — 시연 데이터 수집
-- `12_phase3_act_training.md` — ACT 학습
-- `13_phase4_port_detection.md` — 포트 검출 모델
-- `14_phase5_hybrid_policy.md` — Hybrid 통합
-- `15_phase6_domain_rand.md` — 도메인 랜덤화
-- `16_phase7_ablation_tune.md` — 평가 & 튜닝
-- `17_phase8_submission.md` — 제출
+- **공식 평가 인스턴스 (조직 측):** 64 vCPU / 256 GiB RAM / 1× NVIDIA L4 (24 GiB VRAM) / CUDA 13.0 / Driver 580.126.09
+- **공식 평가 시뮬레이터:** Gazebo (ROS 2 Kilted Kaiju)
+- **카메라:** 1152×1024 @ 20 FPS × 3 (좌/중/우 손목 장착)
+- **F/T 센서:** ATI AXIA80-M20 (`/fts_broadcaster/wrench`)
+- **컨트롤러:** UR5e + Robotiq Hand-E + Cartesian/Joint impedance (~500Hz 보간)
+- **로봇 home pose:** `home_joint_positions` (`sample_config.yaml`)
+- **각 trial timeout:** 180초 (config) / Tier 2 점수는 5초 만점, 60초 0점
+- **NIC 레일 슬라이드:** [-0.0215, +0.0234] m, 회전 ±10°
+- **SC 레일 슬라이드:** [-0.06, +0.055] m
+
+## 7. 핵심 원칙 (Operating Principles)
+
+1. **재학습 가능성 보장**: 모든 학습 스크립트, 데이터셋 분할, seed를 git으로 관리. 어떤 인스턴스에서든 동일 결과 재현되어야 함.
+2. **vast.ai는 휘발성**: 인스턴스가 갑자기 종료될 수 있다고 가정 → 체크포인트는 매 epoch 마다 외부 스토리지(rclone S3 또는 HuggingFace Hub)에 푸시.
+3. **단일 진실의 원천**: 학습/평가/서빙 모두 동일한 `aic_model/policy.py` 인터페이스 사용. 평가 컨테이너에서 동작하는 코드만이 "최종 제출".
+4. **가능한 한 빨리 end-to-end 1회**: Phase 1~5의 부실한 v0를 먼저 통과시키고 → 거기서부터 개선. 각 Phase를 완벽하게 끝낸 후 다음으로 넘어가지 않음.
+5. **점수 회귀 모니터링**: 매 변경마다 100-rollout 평가 → 직전 best 대비 회귀 시 즉시 롤백.
+
+## 8. 다른 문서 인덱스 (이 디렉토리 내)
+
+- `01_agent_team.md` — Claude 서브에이전트 역할 분담 (1인 작업자가 활용할 AI 페르소나들)
+- `02_vastai_setup.md` — vast.ai 인스턴스 선택, Docker, ROS 2, 영속 스토리지
+- `10_phase1_baseline.md` — Baseline 재현 (CheatCode/RunACT 평가)
+- `11_phase2_data_collection.md` — 시연 데이터 수집 (CheatCode 기반 자동 텔레옵)
+- `12_phase3_act_training.md` — LeRobot ACT 학습
+- `13_phase4_port_detection.md` — 포트 검출 모델 (YOLOv8/RT-DETR fine-tune)
+- `14_phase5_hybrid_policy.md` — Stage A/B/C 통합 hybrid policy
+- `15_phase6_domain_rand.md` — 도메인 랜덤화 (Isaac/MuJoCo/Gazebo 3중)
+- `16_phase7_ablation_tune.md` — 100 rollout 평가 & 튜닝
+- `17_phase8_submission.md` — Docker 패키징 → ECR 푸시 → 포털 제출
