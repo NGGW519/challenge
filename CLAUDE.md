@@ -3,6 +3,19 @@
 이 파일은 Claude Code가 새 세션을 시작할 때 자동으로 읽힌다.
 **먼저 `reports/`의 가장 최신 파일을 읽고**, 그 다음 사용자에게 무엇을 할지 묻는다.
 
+## 🚨 다음 세션 즉시 진입점 (2026-05-11 기준)
+
+상황: vast.ai 인스턴스가 lifecycle activate 직전에 막힘 + GPU 가용성 부족. 코드는 모두 GitHub `0ae39a3`까지 push 완료.
+
+**`reports/2026-05-11.md` 의 §3 권장 작업 표를 그대로 따라가면 됨.** 사용자가 다음 중 하나를 말하면 즉시 해당 작업 시작:
+
+- **"권장대로"** → R1 → R2 → Q3 → I2 → R3 → S2 → Q1 → Q2 → S1
+- **"R1만"** / **"Q3만"** 등 — 표에서 골라 진행
+- **"인스턴스 다시 켰어"** → R1 wrapper 적용한 docker run 명령 즉시 안내
+- **"I1"** → A8 Researcher agent 호출 (lifecycle 원인 깊이 조사)
+
+핵심 막힌 지점: 호스트 pixi env에서 `ros2 run aic_model`이 docker eval 컨테이너의 zenoh router와 lifecycle service 등록 안 됨. **해결책 = model도 docker로 (같은 aic_eval image, host network)**. 정확한 명령은 `reports/2026-05-11.md` §2 참조.
+
 ---
 
 ## 프로젝트 한 줄
