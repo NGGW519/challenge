@@ -30,6 +30,13 @@ GT="false"
 # zenoh router endpoint — host network 이므로 localhost
 ROUTER_ADDR="${AIC_ROUTER_ADDR:-localhost:7447}"
 
+# ACL / passwd — 토킷 entrypoint가 AIC_ENABLE_ACL=false 시 PASSWD 무시.
+# 명시적으로 false 두고 PASSWD도 빈 값으로 두 컨테이너에 일관 주입 (대칭성 확보).
+# 평가 환경(ACL on)을 재현하려면 AIC_ENABLE_ACL=true + PASSWD 둘 다 설정.
+AIC_ENABLE_ACL="${AIC_ENABLE_ACL:-false}"
+AIC_EVAL_PASSWD="${AIC_EVAL_PASSWD:-}"
+AIC_MODEL_PASSWD="${AIC_MODEL_PASSWD:-}"
+
 cleanup() {
   docker rm -f aic_eval aic_model >/dev/null 2>&1 || true
 }
@@ -53,6 +60,9 @@ for i in $(seq 1 "$N_REPEATS"); do
     --gpus all --network host \
     -e RMW_IMPLEMENTATION=rmw_zenoh_cpp \
     -e ZENOH_ROUTER_CHECK_ATTEMPTS=-1 \
+    -e AIC_ENABLE_ACL="${AIC_ENABLE_ACL}" \
+    -e AIC_EVAL_PASSWD="${AIC_EVAL_PASSWD}" \
+    -e AIC_MODEL_PASSWD="${AIC_MODEL_PASSWD}" \
     -v "${RUN_DIR}:/root/aic_results" \
     "${IMG}" \
     gazebo_gui:=false \
@@ -78,6 +88,9 @@ for i in $(seq 1 "$N_REPEATS"); do
     --gpus all --network host \
     -e RMW_IMPLEMENTATION=rmw_zenoh_cpp \
     -e ZENOH_ROUTER_CHECK_ATTEMPTS=-1 \
+    -e AIC_ENABLE_ACL="${AIC_ENABLE_ACL}" \
+    -e AIC_EVAL_PASSWD="${AIC_EVAL_PASSWD}" \
+    -e AIC_MODEL_PASSWD="${AIC_MODEL_PASSWD}" \
     --entrypoint "" \
     "${IMG}" \
     bash -lc "
