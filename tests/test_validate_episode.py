@@ -4,7 +4,6 @@
 이 모듈이 그걸 막는 1차 방어선이므로 견고해야 한다.
 """
 
-import shutil
 from pathlib import Path
 
 import pytest
