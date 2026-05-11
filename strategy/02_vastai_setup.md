@@ -23,6 +23,7 @@
 ```
 GPU: RTX 4090 / L40S / A100 80GB / L4
 CUDA: 12.4+ (ROS 2 Kilted Pixi env과 호환)
+Pixi: **v0.63.2 고정** (토킷 `.github/workflows/pixi.yml`이 명시한 버전. 0.68+ 는 `preview=["pixi-build"]` 호환 깨져 install 실패)
 DLPerf: ≥ 30 (4090 기준)
 Disk: ≥ 200 GB
 RAM: ≥ 64 GB (Gazebo + ROS 2 + Pixi)

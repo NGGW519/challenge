@@ -34,17 +34,21 @@ apt-get install -y -q --no-install-recommends \
 pip install --no-cache-dir --quiet 'huggingface_hub>=1.0' \
   || echo "[onstart] WARN: huggingface_hub install failed"
 
-# Pixi (ROS 2 Kilted + Gazebo + Python deps 일괄 관리)
-if ! command -v pixi >/dev/null 2>&1; then
-  curl -fsSL https://pixi.sh/install.sh | bash -s -- --no-modify-path
-  export PATH="$HOME/.pixi/bin:$PATH"
-  # 이후 SSH 세션에서도 자동 인식되도록 .bashrc에 추가 (중복 방지)
-  if ! grep -q '\.pixi/bin' ~/.bashrc 2>/dev/null; then
-    echo 'export PATH="$HOME/.pixi/bin:$PATH"' >> ~/.bashrc
-  fi
+# Pixi v0.63.2 — 토킷이 .github/workflows/pixi.yml에서 명시한 정확한 버전.
+# 다른 버전(특히 0.68+)은 `preview = ["pixi-build"]` 해시 mismatch로 install 실패.
+PIXI_VERSION="${PIXI_VERSION:-v0.63.2}"
+INSTALLED_PIXI_VERSION=""
+if command -v pixi >/dev/null 2>&1; then
+  INSTALLED_PIXI_VERSION="v$(pixi --version 2>/dev/null | awk '{print $2}')"
 fi
-# 어쨌든 현재 셸 PATH에 추가 (set -e 안전)
+if [[ "$INSTALLED_PIXI_VERSION" != "$PIXI_VERSION" ]]; then
+  echo "[onstart] installing pixi ${PIXI_VERSION} (was: ${INSTALLED_PIXI_VERSION:-none})"
+  curl -fsSL https://pixi.sh/install.sh | bash -s -- --version "$PIXI_VERSION" --no-modify-path
+fi
 export PATH="$HOME/.pixi/bin:$PATH"
+if ! grep -q '\.pixi/bin' ~/.bashrc 2>/dev/null; then
+  echo 'export PATH="$HOME/.pixi/bin:$PATH"' >> ~/.bashrc
+fi
 
 # 1. 토킷 + 작업 저장소 clone
 if [[ ! -d aic ]]; then
