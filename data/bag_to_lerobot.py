@@ -117,6 +117,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--min-motion-ratio", type=float, default=0.3,
                    help="|action_xyz| > 1mm/s 인 frame 비율 최소값. "
                         "이 미만이면 ep 제외 (정지 데이터 학습 collapse 방지).")
+    p.add_argument("--action-amplify", type=float, default=1.0,
+                   help="action vector를 이 배수만큼 증폭. "
+                        "이전 시도(Day 5 진단)에서 CheatCode 데이터의 action.std가 "
+                        "너무 작아 ACT가 marginal-mean collapse 했음. "
+                        "권장 4.0 (ACTPlus.py RAW_ACTION_SCALE). "
+                        "학습/추론이 일관되게 같은 값을 써야 함.")
     p.add_argument("--dry_run", action="store_true", help="ROS deps 없이 인터페이스만 검증")
     return p.parse_args(argv)
 
@@ -203,6 +209,7 @@ def convert_episode(ep_dir: Path, fps: int, image_size: tuple[int, int]) -> list
                   wr.wrench.torque.x, wr.wrench.torque.y, wr.wrench.torque.z]
         # action: 다음 스텝의 cartesian delta — 단순 placeholder
         # (정확하려면 mc.pose 와 직전 frame mc.pose의 difference로 구해야 함)
+        # action_amplify는 frames 작성 후 일괄 적용 (아래 후처리).
         action = [0.0] * 7
 
         frames.append(Frame(
@@ -295,6 +302,11 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("skip %s: %s", ep, e); continue
         if not f:
             logger.warning("no frames in %s", ep); continue
+
+        # Day 5 진단 대응 — marginal-mean collapse 방어로 action 증폭.
+        if args.action_amplify != 1.0:
+            for frame in f:
+                frame.action = [a * args.action_amplify for a in frame.action]
 
         stats = compute_stats(ep.name, f)
         useful, reason = stats.is_useful(min_motion_ratio=args.min_motion_ratio)

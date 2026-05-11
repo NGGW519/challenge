@@ -23,6 +23,25 @@
 >
 > Phase 2를 시작할 때 위 5개가 코드에 살아있는지 audit 필수.
 
+### Marginal-mean collapse 근본 원인 (Day 5 진단 결론)
+이전 시도의 진단 (3 증거):
+1. **시간 불변성**: 추론 step 0~580 내내 raw action 변동 < 1%
+2. **공간 불변성**: trial 1/2/3 (다른 케이블/target) 모두 동일한 raw action
+3. **통계 일치**: raw action ≈ 학습 데이터의 `action_mean`
+
+→ Policy가 관측 무시하고 marginal mean만 출력. MSE 최소화 솔루션.
+
+**원인**: 학습 데이터의 `action.std ≈ 1.2 cm/s` (CheatCode descent step 0.5mm/0.05s
+= 1 cm/s. 다른 단계도 비슷). 너무 작은 std → ACT가 conditional prediction
+포기하고 평균만 학습.
+
+**Phase 2에서 추가 방어**:
+- `bag_to_lerobot.py --action-amplify N` 옵션으로 action vector를 N배 증폭해
+  학습 분포의 std를 인위적으로 키울 수 있음 (default N=1.0, 권장 4.0 — 이전 시도 RAW_ACTION_SCALE).
+- 또는 `--action-aggregate K` 로 K 미래 step의 action을 합쳐 큰 step으로 변환
+  (실효 속도 ↑).
+- 학습 후 ACT inference에서도 amplify 적용 가능 — 단, 학습/추론이 일관돼야 함.
+
 
 > **목표**: ACT/Diffusion Policy 학습용 LeRobot 데이터셋 v2.1 포맷으로 **1000+ rollouts** 수집.
 > 시연자: **CheatCode 정책** (ground_truth=true) — 사람 텔레옵보다 빠르고 일관성 있음.
