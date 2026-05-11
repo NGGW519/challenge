@@ -79,8 +79,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="model 컨테이너에서 띄울 정책. 기본은 우리 자체 recorder")
     p.add_argument("--ground-truth", default="true",
                    choices=["true", "false"], help="aic_eval ground_truth 옵션")
-    p.add_argument("--episode-timeout-s", type=float, default=240.0,
-                   help="단일 episode 강제 종료 시각 (compose 무한 hang 방지)")
+    p.add_argument("--episode-timeout-s", type=float, default=1800.0,
+                   help="단일 episode 강제 종료 시각. "
+                        "이전 시도에서 600s timeout이 짧아 trajectory가 잘려 학습 collapse를 유발 — "
+                        "30분(1800s) default로 보수적. RTF가 좋으면 단축 가능.")
+    p.add_argument("--min-success-rate", type=float, default=0.8,
+                   help="누적 success rate가 이 미만이면 수집 즉시 중단 "
+                        "(잘못된 데이터 다량 생성 방지). 기본 0.8.")
+    p.add_argument("--sample-every", type=int, default=10,
+                   help="N ep마다 1개를 mp4로 추출 + HF dataset에 업로드해 사용자 검증 유도. "
+                        "0이면 비활성.")
     p.add_argument("--dry-run", action="store_true",
                    help="docker 호출 안 하고 인터페이스 검증만")
     p.add_argument("--seed-shuffle", type=int, default=None,
@@ -183,18 +191,81 @@ def collect_one(args: argparse.Namespace, idx: int, scenario: str, seed: int,
     try:
         make_scene(scenario, seed, scene_yaml)
         ok = run_episode_via_compose(ep_dir, scene_yaml, args)
-        return EpisodeResult(ep_id=ep_id, scenario=scenario, seed=seed,
-                             success=ok, duration_s=time.monotonic() - t0)
     except Exception as e:
         logger.exception("episode %s failed", ep_id)
         return EpisodeResult(ep_id=ep_id, scenario=scenario, seed=seed,
                              success=False, duration_s=time.monotonic() - t0,
                              error=str(e))
 
+    # scoring.yaml + bag duration 기반 사후 검증.
+    # 이전 v2 회귀의 원인 = "approach 시작 직후 cut된 trajectory가 dataset 대부분"
+    # 을 차단. 실패 ep는 raw_dir/_failed/ 로 격리되어 학습에 안 들어감.
+    validation_ok = True
+    validation_reason = ""
+    if not args.dry_run:
+        from data.validate_episode import quarantine, validate
+        result = validate(
+            ep_dir,
+            min_trial_score=50.0,
+            require_full_insertion=False,
+            min_bag_duration=20.0,
+        )
+        validation_ok = result.valid
+        validation_reason = result.reason
+        if not result.valid:
+            quarantine_root = raw_dir / "_failed"
+            try:
+                quarantine(ep_dir, quarantine_root)
+                logger.warning("%s quarantined: %s", ep_id, result.reason)
+            except OSError as e:
+                logger.warning("%s quarantine failed: %s", ep_id, e)
+
+    return EpisodeResult(
+        ep_id=ep_id, scenario=scenario, seed=seed,
+        success=ok and validation_ok,
+        duration_s=time.monotonic() - t0,
+        error=validation_reason if not validation_ok else None,
+    )
+
 
 # --------------------------------------------------------------------- #
 # Post-processing: LeRobot conversion + HF upload
 # --------------------------------------------------------------------- #
+def _maybe_export_sample(ep_dir: Path, args: argparse.Namespace) -> None:
+    """수집된 ep에서 center_camera 비디오 1개를 mp4로 추출 + HF push.
+    사용자가 콘솔에서 한 번 보고 OK 사인 → 다음 batch.
+    잘못된 데이터 1000ep 만들기 전에 차단."""
+    if args.dry_run:
+        return
+    if shutil.which("ros2") is None or shutil.which("ffmpeg") is None:
+        logger.debug("ros2 or ffmpeg not available — skip sample export")
+        return
+
+    # rosbag 안의 center_camera 토픽을 mp4로 변환하는 정확한 명령은
+    # vast.ai 환경에서 검증 후 보강. 우선 placeholder:
+    mp4_path = ep_dir / "sample.mp4"
+    logger.info("[sample] would extract video from %s (NOT YET IMPLEMENTED)", ep_dir)
+    # TODO(vast.ai): ros2 image_publisher + ffmpeg pipe 로 mp4 생성
+    #   pixi run ros2 bag play <ep_dir> --topics /center_camera/image &
+    #   pixi run ros2 run image_view image_saver image:=/center_camera/image
+    #   ffmpeg -framerate 20 -i frame%04d.png -c:v libx264 -pix_fmt yuv420p mp4_path
+
+    # HF dataset repo에 _samples/ 디렉토리로 push
+    if args.push_hf and mp4_path.exists() and shutil.which("hf"):
+        try:
+            subprocess.run(
+                ["hf", "upload", args.push_hf, str(mp4_path),
+                 f"_samples/{ep_dir.name}.mp4",
+                 "--repo-type", "dataset",
+                 "--commit-message", f"sample {ep_dir.name}"],
+                check=False, cwd=ROOT,
+            )
+            logger.info("[sample] pushed → hf://%s/_samples/%s.mp4",
+                        args.push_hf, ep_dir.name)
+        except Exception as e:
+            logger.warning("sample push failed: %s", e)
+
+
 def maybe_convert_to_lerobot(args: argparse.Namespace, raw_dir: Path) -> None:
     if not args.convert_to_lerobot:
         return
@@ -242,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("collecting %d episodes → %s (dist=%s)", args.n, raw_dir, dist)
 
     results: list[EpisodeResult] = []
+    abort_min = max(10, args.n // 10)  # 처음 max(10, N/10)개 후부터 success rate 게이트
     for i in range(args.n):
         scenario = sample_scenario(rng, dist)
         seed = args.seed_base + i
@@ -249,6 +321,25 @@ def main(argv: list[str] | None = None) -> int:
         results.append(r)
         logger.info("[%d/%d] %s scenario=%s seed=%d ok=%s dur=%.1fs",
                     i + 1, args.n, r.ep_id, r.scenario, r.seed, r.success, r.duration_s)
+
+        # 검증 게이트 1: success rate 너무 낮으면 즉시 중단 (잘못된 데이터 다량 방지)
+        if len(results) >= abort_min:
+            success_rate = sum(1 for x in results if x.success) / len(results)
+            if success_rate < args.min_success_rate:
+                logger.error(
+                    "ABORT: success_rate=%.2f < %.2f after %d episodes. "
+                    "Likely systemic issue (timeout, CheatCode misconfig, etc). "
+                    "Inspect %s/_failed/ before retrying.",
+                    success_rate, args.min_success_rate, len(results), raw_dir,
+                )
+                break
+
+        # 검증 게이트 2: N마다 sample mp4 추출 + HF dataset에 업로드
+        if args.sample_every > 0 and (i + 1) % args.sample_every == 0 and r.success:
+            try:
+                _maybe_export_sample(raw_dir / r.ep_id, args)
+            except Exception as e:
+                logger.warning("sample export failed for %s: %s", r.ep_id, e)
 
     summary_path = raw_dir / "collection_summary.json"
     summary = {

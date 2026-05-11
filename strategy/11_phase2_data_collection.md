@@ -1,5 +1,29 @@
 # 11. Phase 2 — 시연 데이터 수집
 
+> ## ⚠️ 이전 v2 회귀(3/300)의 핵심 교훈 (2026-05-11 추가)
+>
+> 이전 시도에서 같은 토킷·CheatCode로 데이터 수집했지만 학습이 marginal-mean
+> collapse로 망가졌다. 사용자가 직접 rosbag 재생해보니 **"port 앞으로 출발해서
+> 채 도착도 못 했는데 영상이 끝남"** — 즉 trajectory가 잘려 학습 데이터의
+> 대부분이 "정지 또는 approach 초반"이었음.
+>
+> **원인**: `timeout 600` (10분)이 한 ep(3 trial = 20–60분)에 비해 짧았고,
+> 성공 여부를 사후 검증하지 않은 채 모든 frame을 dataset에 넣음.
+>
+> **반드시 지켜야 할 sanity layer (코드로 강제)**:
+> 1. `episode_timeout_s ≥ 1800` (`data/collect_demos.py` default).
+> 2. 매 ep마다 `data/validate_episode.py` 호출:
+>    - `scoring.yaml` 의 trial total ≥ 50 (부분 삽입까지 허용)
+>    - rosbag duration ≥ 20s (잘리지 않았는지)
+>    - 실패 ep는 `raw_episodes/_failed/` 로 격리 — dataset에 안 들어감
+> 3. 누적 success rate < 0.8 이면 collection 즉시 abort (잘못된 데이터 대량 생성 차단).
+> 4. `bag_to_lerobot.py` 가 ep별 `motion_frame_ratio` 검사 — `< 0.3` 인 ep 제외.
+> 5. 매 N=10 ep 마다 1개를 mp4로 추출해 HF dataset `_samples/` 에 push.
+>    사용자가 콘솔에서 한 번 보고 OK 사인 → 다음 batch.
+>
+> Phase 2를 시작할 때 위 5개가 코드에 살아있는지 audit 필수.
+
+
 > **목표**: ACT/Diffusion Policy 학습용 LeRobot 데이터셋 v2.1 포맷으로 **1000+ rollouts** 수집.
 > 시연자: **CheatCode 정책** (ground_truth=true) — 사람 텔레옵보다 빠르고 일관성 있음.
 > 다양성: 매 rollout마다 task_board pose / 컴포넌트 위치 / 광원 / 카메라 noise 무작위화.

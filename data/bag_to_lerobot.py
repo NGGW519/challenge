@@ -57,6 +57,55 @@ class Frame:
     task_index: int
 
 
+@dataclass
+class EpisodeStats:
+    """Per-episode 통계 — 학습 직전 sanity check 용.
+    이전 v2 회귀의 원인 = "정지 frame이 90% 이상인 데이터로 ACT 학습 → marginal-mean collapse".
+    motion_frame_ratio 가 0.3 미만이면 ep 자체가 useless.
+    """
+    ep_id: str
+    n_frames: int
+    duration_s: float
+    motion_frame_ratio: float       # |action| > threshold 인 frame 비율
+    action_l1_mean: float
+    action_l1_p95: float
+    insertion_event: bool           # /scoring/insertion_event 토픽 메시지 존재 여부
+
+    def is_useful(self, min_motion_ratio: float = 0.3,
+                  min_frames: int = 50) -> tuple[bool, str]:
+        if self.n_frames < min_frames:
+            return False, f"n_frames {self.n_frames} < {min_frames}"
+        if self.motion_frame_ratio < min_motion_ratio:
+            return False, (f"motion_frame_ratio {self.motion_frame_ratio:.2f} < "
+                           f"{min_motion_ratio} (학습 신호 부족)")
+        return True, "ok"
+
+
+def compute_stats(ep_id: str, frames: list[Frame],
+                  motion_threshold: float = 1e-3) -> EpisodeStats:
+    """frames 시퀀스에서 통계 계산.
+
+    motion_threshold: |action| 가 이 값 이상이면 motion frame.
+    Cartesian delta(m/s) 단위라 1e-3 = 1mm/s.
+    """
+    if not frames:
+        return EpisodeStats(ep_id, 0, 0.0, 0.0, 0.0, 0.0, False)
+
+    import numpy as np  # local import
+    actions = np.array([f.action for f in frames], dtype=np.float64)
+    l1 = np.linalg.norm(actions[:, :3], ord=1, axis=1)  # 위치 성분만
+    motion_ratio = float((l1 > motion_threshold).mean())
+    return EpisodeStats(
+        ep_id=ep_id,
+        n_frames=len(frames),
+        duration_s=frames[-1].t - frames[0].t,
+        motion_frame_ratio=motion_ratio,
+        action_l1_mean=float(l1.mean()),
+        action_l1_p95=float(np.percentile(l1, 95)),
+        insertion_event=False,  # task.yaml에서 별도 검증
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--bag_root",   required=True, help="ep_* 디렉토리들이 있는 루트")
@@ -65,6 +114,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--fps",        type=int,   default=20)
     p.add_argument("--image_size", default="480x640", help="HxW")
     p.add_argument("--max_episodes", type=int, default=0, help="0 = 전부")
+    p.add_argument("--min-motion-ratio", type=float, default=0.3,
+                   help="|action_xyz| > 1mm/s 인 frame 비율 최소값. "
+                        "이 미만이면 ep 제외 (정지 데이터 학습 collapse 방지).")
     p.add_argument("--dry_run", action="store_true", help="ROS deps 없이 인터페이스만 검증")
     return p.parse_args(argv)
 
@@ -233,6 +285,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     frames_per_ep: list[list[Frame]] = []
+    stats_list: list[EpisodeStats] = []
+    rejected: list[dict] = []
+
     for ep in eps:
         try:
             f = convert_episode(ep, args.fps, image_size)
@@ -240,17 +295,49 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("skip %s: %s", ep, e); continue
         if not f:
             logger.warning("no frames in %s", ep); continue
+
+        stats = compute_stats(ep.name, f)
+        useful, reason = stats.is_useful(min_motion_ratio=args.min_motion_ratio)
+        if not useful:
+            logger.warning("REJECT %s: %s (motion=%.2f, n=%d)",
+                           ep.name, reason, stats.motion_frame_ratio, stats.n_frames)
+            rejected.append({"ep_id": ep.name, "reason": reason,
+                             "motion_ratio": stats.motion_frame_ratio,
+                             "n_frames": stats.n_frames})
+            continue
+
         frames_per_ep.append(f)
+        stats_list.append(stats)
+
+    n_total = len(frames_per_ep) + len(rejected)
+    logger.info("conversion: accepted %d / rejected %d / total %d",
+                len(frames_per_ep), len(rejected), n_total)
+    if stats_list:
+        motion_ratios = [s.motion_frame_ratio for s in stats_list]
+        logger.info("motion_frame_ratio: mean=%.2f median=%.2f min=%.2f max=%.2f",
+                    sum(motion_ratios) / len(motion_ratios),
+                    sorted(motion_ratios)[len(motion_ratios) // 2],
+                    min(motion_ratios), max(motion_ratios))
 
     write_lerobot(frames_per_ep, out_root, args.repo_id, args.fps)
 
-    # 메타 정보 한 줄 요약
+    # 메타 정보 + per-ep stats 저장 (사용자가 후속 분석 가능)
     summary = {
-        "episodes": len(frames_per_ep),
+        "episodes_accepted": len(frames_per_ep),
+        "episodes_rejected": len(rejected),
         "frames":   sum(len(f) for f in frames_per_ep),
         "fps":      args.fps,
         "image_size": list(image_size),
         "repo_id":  args.repo_id,
+        "rejected": rejected,
+        "per_episode_stats": [
+            {"ep_id": s.ep_id, "n_frames": s.n_frames,
+             "duration_s": s.duration_s,
+             "motion_frame_ratio": s.motion_frame_ratio,
+             "action_l1_mean": s.action_l1_mean,
+             "action_l1_p95": s.action_l1_p95}
+            for s in stats_list
+        ],
     }
     (out_root / "conversion_summary.json").write_text(json.dumps(summary, indent=2))
     return 0

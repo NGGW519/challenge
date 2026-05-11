@@ -26,9 +26,58 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
     python3-pip python3-venv tmux htop \
-    ca-certificates build-essential lsb-release \
-    libgl1 libglib2.0-0 \
+    ca-certificates build-essential lsb-release gnupg \
+    libgl1 libglib2.0-0 sudo \
   || echo "[onstart] WARN: some apt packages failed (계속 진행)"
+
+# 0.5. Docker engine + nvidia-container-toolkit
+#      이전 시도 vast/00_setup.sh 패턴.
+#      Phase 1 평가 = docker compose 의존이므로 docker 동작이 필수.
+#      vast.ai 인스턴스가 --privileged 모드여야 iptables 권한 통과.
+if ! command -v docker >/dev/null 2>&1; then
+  echo "[onstart] installing docker engine"
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-jammy}")"
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update -q
+  apt-get install -y -q --no-install-recommends \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+    || echo "[onstart] WARN: docker apt install failed"
+fi
+
+if ! command -v nvidia-ctk >/dev/null 2>&1; then
+  echo "[onstart] installing nvidia-container-toolkit"
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+    > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  apt-get update -q
+  apt-get install -y -q nvidia-container-toolkit \
+    || echo "[onstart] WARN: nvidia-container-toolkit install failed"
+  nvidia-ctk runtime configure --runtime=docker 2>&1 | tail -3 || true
+fi
+
+# dockerd 시작 (vast.ai 컨테이너엔 systemd 없으니 직접 띄움)
+if ! docker info >/dev/null 2>&1; then
+  echo "[onstart] starting dockerd in background"
+  mkdir -p /var/log
+  nohup dockerd > /var/log/dockerd.log 2>&1 &
+  for i in $(seq 1 20); do
+    sleep 2
+    if docker info >/dev/null 2>&1; then
+      echo "[onstart] dockerd ready"; break
+    fi
+  done
+  if ! docker info >/dev/null 2>&1; then
+    echo "[onstart] WARN: dockerd not responding. Check /var/log/dockerd.log."
+    echo "[onstart]       이 인스턴스가 --privileged 모드 아닐 가능성."
+  fi
+fi
+docker info 2>&1 | grep -iE "runtime|nvidia" | head -3 || true
 
 # huggingface_hub 1.x — CLI는 `hf` 명령으로 함께 설치됨 (extras 불필요)
 pip install --no-cache-dir --quiet 'huggingface_hub>=1.0' \
