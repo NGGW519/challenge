@@ -33,12 +33,16 @@ from .motion import (
     MotionCommand,
     make_approach_command,
     make_insertion_step,
+    make_velocity_command,
+    quat_z_axis_world,
 )
 from .port_detector import PortDetector
 from .safety import (
     FORCE_HARD_DURATION_S,
     FORCE_HARD_N,
+    ForceAttenuator,
     ForceWatchdog,
+    InsertionStabilityDetector,
 )
 
 WEIGHTS_DIR = Path(__file__).parent / "weights"
@@ -207,14 +211,13 @@ class HybridPolicy(Policy):
 
         self._cached_target_world = target_world
 
-        # plug axis: TCP의 +z 방향을 plug 끝 방향으로 가정 (그립 오프셋이 그렇게 설계됨).
-        # 평가 환경에선 obs에서 더 정확한 plug axis 추정 필요 — Phase 5 잔여 작업.
+        # plug axis: TCP +z 축 → world 좌표계로 변환. 그립 오프셋이 +z = plug tip
+        # 방향으로 설계됐다는 토킷 컨벤션.
         tcp = self._get_tcp_pose(get_obs())
         if tcp is None:
             return False
         _, tcp_quat = tcp
-        # quat → z-axis: q*[0,0,1]*q^-1, 단순화: 일단 world +z 사용
-        plug_axis = np.array([0.0, 0.0, 1.0])
+        plug_axis = quat_z_axis_world(*tcp_quat.tolist())
 
         cmd = make_approach_command(
             port_xyz_world=target_world,
@@ -323,13 +326,36 @@ class HybridPolicy(Policy):
             send_feedback("stage_B: ACT disabled — skip")
             return False
 
-        # ACT chunk inference loop는 ROS observation 스키마에 강하게 의존하므로
-        # 실제 forward 호출 + MotionCommand 발행은 vast.ai 인스턴스에서 채움.
-        # 여기서는 hysteresis 기반 전환 조건을 명시적으로 검사.
+        self.act.reset()
         deadline = time.monotonic() + self._budget_b
         condition_started_at: float | None = None
+        twist_smoother = EmaSmoother(dim=6, alpha=0.4)
+        loop_period = 1.0 / 20.0  # 20Hz
+
         while time.monotonic() < deadline and not self._emergency:
-            if self._should_transition_to_c(get_obs()):
+            obs = get_obs()
+
+            # ACT forward — obs 스키마 변환 실패 시 hysteresis 만 검사하고 진행
+            act_obs = self._build_act_observation(obs)
+            action: np.ndarray | None = None
+            if act_obs is not None:
+                try:
+                    action = self.act.select_action(act_obs)
+                except Exception as e:
+                    self.logger.warning("ACT select_action failed: %s", e)
+                    action = None
+
+            if action is not None and action.shape[0] >= 6:
+                # ACTPlus: [vx,vy,vz, wx,wy,wz, gripper]. Cartesian velocity 발행.
+                twist = twist_smoother(action[:6])
+                vel_cmd = make_velocity_command(
+                    twist_lin=twist[:3],
+                    twist_ang=twist[3:6],
+                )
+                self._send(vel_cmd, move_robot)
+
+            # 전환 조건 — 접촉 + 정렬이 hold_s 만큼 유지되면 C 로
+            if self._should_transition_to_c(obs):
                 if condition_started_at is None:
                     condition_started_at = time.monotonic()
                 elif (time.monotonic() - condition_started_at) >= STAGE_TRANSITION_HOLD_S:
@@ -337,9 +363,50 @@ class HybridPolicy(Policy):
                     return True
             else:
                 condition_started_at = None
-            time.sleep(0.05)
+
+            time.sleep(loop_period)
+
         # 시간 초과는 점수 측면에서 손해지만 B→C 강제 진입 (Stage C가 spiral search로 회복).
         return True
+
+    def _build_act_observation(self, obs: Any) -> dict[str, np.ndarray] | None:
+        """Observation msg → ACT 입력 dict.
+
+        키 컨벤션은 LeRobot 학습 데이터셋과 일치해야 한다:
+          - observation.images.{left,center,right}: (3, H, W) float32 [0,1]
+          - observation.state: (D,) float32
+
+        Phase 3 학습 코드가 어떤 state 차원을 쓰는지에 따라 D 가 달라지므로,
+        joint_state.position 만 우선 채우고 wrench 는 학습 시 정규화 stats 와
+        함께 추가 예정. ACT 모델이 stats 미사용 시 raw 그대로 흘려도 됨.
+        """
+        imgs_list = self._extract_images(obs)
+        if imgs_list is None or len(imgs_list) < 3:
+            return None
+        try:
+            left, center, right = imgs_list
+            out: dict[str, np.ndarray] = {
+                "observation.images.left":   self._img_to_chw_float(left),
+                "observation.images.center": self._img_to_chw_float(center),
+                "observation.images.right":  self._img_to_chw_float(right),
+            }
+            js = getattr(obs, "joint_states", None) or getattr(obs, "joint_state", None)
+            if js is not None and hasattr(js, "position"):
+                state = np.asarray(list(js.position)[:7], dtype=np.float32)
+                out["observation.state"] = state
+            return out
+        except Exception as e:
+            self.logger.debug("_build_act_observation failed: %s", e)
+            return None
+
+    @staticmethod
+    def _img_to_chw_float(img: np.ndarray) -> np.ndarray:
+        """(H,W,3) uint8 → (3,H,W) float32 in [0,1]. 이미 CHW 면 그대로."""
+        if img.ndim == 3 and img.shape[0] == 3 and img.shape[2] != 3:
+            chw = img
+        else:
+            chw = np.transpose(img, (2, 0, 1))
+        return chw.astype(np.float32) / 255.0
 
     def _should_transition_to_c(self, obs: Any) -> bool:
         """B→C 전환 조건: |F| > 5N AND z 거리 ≤ 10mm AND 축 각도 ≤ 5°.
@@ -367,6 +434,24 @@ class HybridPolicy(Policy):
     # ------------------------------------------------------------------ #
     # Stage C — compliant force-guided insertion
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _tcp_lin_vel(obs: Any) -> float:
+        """controller_state.tcp_velocity.linear 또는 0. ACTPlus 의 stationary 판정용."""
+        cs = getattr(obs, "controller_state", None)
+        if cs is None:
+            return 0.0
+        v = getattr(cs, "tcp_velocity", None)
+        if v is None:
+            return 0.0
+        lin = getattr(v, "linear", None)
+        if lin is None:
+            return 0.0
+        return float(np.linalg.norm([
+            getattr(lin, "x", 0.0),
+            getattr(lin, "y", 0.0),
+            getattr(lin, "z", 0.0),
+        ]))
+
     def _stage_c(self, task, get_obs, move_robot, send_feedback) -> bool:
         send_feedback("stage_C: compliant insertion")
         period = 1.0 / STAGE_C_LOOP_HZ
@@ -377,6 +462,10 @@ class HybridPolicy(Policy):
         spiral_phase = 0.0
         spiral_radius = 0.0
 
+        # ACTPlus 패턴: hard watchdog 전에 명령 자체를 감쇠 + stable insertion 조기 종료
+        attenuator = ForceAttenuator()
+        stability = InsertionStabilityDetector()
+
         while time.monotonic() < deadline and not self._emergency:
             obs = get_obs()
             tcp = self._get_tcp_pose(obs)
@@ -385,6 +474,22 @@ class HybridPolicy(Policy):
             tcp_xyz, tcp_quat = tcp
             f = self._get_wrench(obs)[:3] - f_baseline
             f_norm_z = abs(float(f[2]))
+            f_norm_total = float(np.linalg.norm(f))
+
+            # 조기 종료: 정지 + z 방향 접촉 + 전체 |F| 안전 → stable insertion
+            if stability.update(fz=float(f[2]), f_total=f_norm_total,
+                                tcp_lin_vel=self._tcp_lin_vel(obs)):
+                send_feedback("stage_C: stable contact — early termination")
+                # 마지막 zero-delta 명령으로 컨트롤러 정지
+                zero_cmd = make_insertion_step(
+                    current_xyz=tcp_xyz,
+                    forward_axis_world=np.array([0.0, 0.0, 1.0]),
+                    forward_m=0.0,
+                    lateral_xy=np.zeros(2),
+                    orientation_qxyzw=tuple(tcp_quat.tolist()),
+                )
+                self._send(zero_cmd, move_robot)
+                return True
 
             # forward 결정
             if f_norm_z < STAGE_C_FORWARD_FORCE_N:
@@ -408,6 +513,11 @@ class HybridPolicy(Policy):
 
             lateral_xy = lat_admit + spiral_xy
             forward_axis = np.array([0.0, 0.0, 1.0])  # TCP +z 가정 (Stage A와 동일)
+
+            # sustained high force → step 자체를 attenuate (-12N 페널티 회피)
+            scale = attenuator.update(f_norm_total)
+            forward *= scale
+            lateral_xy = lateral_xy * scale
 
             cmd = make_insertion_step(
                 current_xyz=tcp_xyz,

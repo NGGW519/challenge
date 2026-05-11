@@ -12,3 +12,4 @@
 
 - [2026-05-10](2026-05-10.md) — GitHub 연결, 전략 문서 11개, 인프라/스크립트 골조, 단위 테스트
 - [2026-05-11](2026-05-11.md) — SOTA 검증, ACTPlus 패턴 통합, vast.ai 인스턴스 #1 destroyed/#2 lifecycle 막힘, 다음 권장 작업 9개 정의
+- [2026-05-12](2026-05-12.md) — 권장 9개 (R1 R2 Q3 I2 R3 S2 Q1 Q2 S1) 완주. run_baseline_local.sh wrapper, override image 교체, audit zenoh 검증, ForceAttenuator/InsertionStabilityDetector, Stage A/B 코드 채움, 결정 로그 SOTA 정합. 86 PASS.

@@ -24,17 +24,21 @@ services:
       - ${AIC_RESULTS_DIR:-./aic_results}:/root/aic_results
 
   model:
-    # baseline 평가는 aic 토킷에 들어있는 example policy를 그대로 쓴다.
-    # dev image로 띄워서 -p policy:= 로 주입.
-    image: ghcr.io/nggw519/aic-dev:latest
+    # 2026-05-12: dev image → aic_eval image 로 교체.
+    # 토킷이 aic_eval image 안에 `/ws_aic/install` 로 aic_model 노드를 빌드해
+    # 두므로 같은 image 로 model 도 띄우면 zenoh / lifecycle 환경이 정확히 일치.
+    # (2026-05-11 host pixi env 로 띄웠을 때 lifecycle ACTIVATE 가 막힌 원인 회피.)
+    image: ghcr.io/intrinsic-dev/aic/aic_eval
+    entrypoint: ""
     command: >
-      bash -lc "source /workspace/aic/install/setup.bash 2>/dev/null || true;
-                pixi --manifest-path /workspace/aic/pixi.toml run
-                ros2 run aic_model aic_model
+      bash -lc "source /ws_aic/install/setup.bash &&
+                export ZENOH_CONFIG_OVERRIDE='connect/endpoints=[\"tcp/eval:7447\"];transport/shared_memory/enabled=false' &&
+                export ZENOH_SESSION_CONFIG_URI=/aic_zenoh_config.json5 &&
+                exec ros2 run aic_model aic_model --ros-args
                   -p policy:=${AIC_POLICY_MODULE:-aic_example_policies.ros.WaveArm}
                   -p use_sim_time:=true"
-    volumes:
-      - /home/nggw/challenge/aic:/workspace/aic:ro
-      - /home/nggw/challenge/aic_work:/workspace/aic_work
     environment:
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+      ZENOH_ROUTER_CHECK_ATTEMPTS: -1
+      AIC_ROUTER_ADDR: eval:7447
       AIC_POLICY_MODULE: ${AIC_POLICY_MODULE:-aic_example_policies.ros.WaveArm}

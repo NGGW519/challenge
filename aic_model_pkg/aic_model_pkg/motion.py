@@ -215,3 +215,51 @@ def make_insertion_step(
         mode=MODE_POSITION,
     )
     return cmd.with_clamped_position()
+
+
+def quat_z_axis_world(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
+    """orientation 쿼터니언(xyzw)의 회전행렬 3번째 열 = TCP +z 축의 world 방향.
+
+    Stage A 가 plug 끝 방향을 추정할 때 사용. 그립 오프셋이 +z = plug tip 으로
+    설계됐다는 토킷 컨벤션을 따른다.
+    """
+    n = qx * qx + qy * qy + qz * qz + qw * qw
+    if n < 1e-12:
+        return np.array([0.0, 0.0, 1.0])
+    s = 2.0 / n
+    return np.array([
+        s * (qx * qz + qw * qy),
+        s * (qy * qz - qw * qx),
+        1.0 - s * (qx * qx + qy * qy),
+    ], dtype=np.float64)
+
+
+def make_velocity_command(
+    twist_lin: np.ndarray,
+    twist_ang: np.ndarray,
+    orientation_qxyzw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+    stiffness: Sequence[float] = (100.0, 100.0, 100.0, 50.0, 50.0, 50.0),
+    damping: Sequence[float] = (40.0, 40.0, 40.0, 15.0, 15.0, 15.0),
+    max_lin: float = 0.15,
+    max_ang: float = 0.5,
+) -> MotionCommand:
+    """Stage B — ACT 의 6D velocity twist 를 MODE_VELOCITY MotionCommand 로.
+
+    회전은 명령에 사용되지 않으나 메시지 채움용으로 quat 그대로 전달.
+    twist 값은 안전을 위해 component-wise clip.
+    """
+    lin = np.clip(np.asarray(twist_lin, dtype=np.float64).reshape(3), -max_lin, max_lin)
+    ang = np.clip(np.asarray(twist_ang, dtype=np.float64).reshape(3), -max_ang, max_ang)
+    # MotionCommand 는 pose 기반. velocity 모드일 때 target_pose 의 position 은
+    # 컨트롤러가 무시하지만, 메시지 검증 용도로 0,0,0 사용.
+    cmd = MotionCommand(
+        target_pose=Pose(lin[0], lin[1], lin[2], *orientation_qxyzw),
+        frame_id=FRAME_BASE,
+        stiffness=stiffness,
+        damping=damping,
+        mode=MODE_VELOCITY,
+    )
+    # angular velocity 는 호출 측이 ros msg 변환 후 별도 채움 필요 — 임시 보관.
+    cmd._twist_ang = ang  # type: ignore[attr-defined]
+    cmd._twist_lin = lin  # type: ignore[attr-defined]
+    return cmd

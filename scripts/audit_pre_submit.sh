@@ -101,6 +101,54 @@ else
   printf "  ❌ submit.Dockerfile missing\n"; FAIL=1
 fi
 
+# 2026-05-12 Q3: lifecycle ACTIVATE 가 막혔던 zenoh / RMW / passwd 환경변수를
+# 제출 컨테이너가 빠뜨리지 않도록 자동 검증.
+section "submit Dockerfile zenoh / lifecycle env"
+if [[ -f "$SUBMIT_DF" ]]; then
+  # RMW_IMPLEMENTATION 은 반드시 rmw_zenoh_cpp 여야 함 (토킷 평가가 zenoh 통신).
+  if grep -E "^ENV[[:space:]]+RMW_IMPLEMENTATION[[:space:]]*=?[[:space:]]*rmw_zenoh_cpp" "$SUBMIT_DF" > /dev/null; then
+    printf "  RMW_IMPLEMENTATION=rmw_zenoh_cpp ✅\n"
+  else
+    printf "  ❌ RMW_IMPLEMENTATION 누락 또는 rmw_zenoh_cpp 가 아님\n"
+    FAIL=1
+  fi
+
+  # ZENOH_ROUTER_CHECK_ATTEMPTS — 평가 컨테이너 router 늦게 떠도 무한 재시도.
+  if grep -E "^ENV[[:space:]]+ZENOH_ROUTER_CHECK_ATTEMPTS" "$SUBMIT_DF" > /dev/null; then
+    printf "  ZENOH_ROUTER_CHECK_ATTEMPTS set ✅\n"
+  else
+    printf "  ⚠️  ZENOH_ROUTER_CHECK_ATTEMPTS 미설정 — router 늦게 뜨면 model 죽을 수 있음\n"
+  fi
+
+  # AIC_MODEL_PASSWD 가 CHANGE_IN_PROD 그대로면 ACL 활성 환경에서 인증 실패 위험.
+  # (eval-override.yaml 에 빈 값 또는 토킷이 정한 값으로 주입돼야 함.)
+  if grep -E '^ENV[[:space:]]+AIC_MODEL_PASSWD[[:space:]]*=?[[:space:]]*"?CHANGE_IN_PROD"?[[:space:]]*$' "$SUBMIT_DF" > /dev/null; then
+    if [[ "$STRICT" == "1" ]]; then
+      printf "  ❌ AIC_MODEL_PASSWD=CHANGE_IN_PROD — 제출 전 실제 값 또는 빈 값(ACL off)으로 교체\n"
+      FAIL=1
+    else
+      printf "  ⚠️  AIC_MODEL_PASSWD=CHANGE_IN_PROD (제출 직전 STRICT=1 에선 fail)\n"
+    fi
+  else
+    printf "  AIC_MODEL_PASSWD plausible ✅\n"
+  fi
+fi
+
+# eval-override.yaml 에도 같은 검증 — 컴포즈 경로로 제출 image 검증할 때 필요.
+EVAL_OV="${ROOT}/docker/eval-override.yaml"
+if [[ -f "$EVAL_OV" ]]; then
+  if grep -q "AIC_ROUTER_ADDR" "$EVAL_OV"; then
+    printf "  eval-override AIC_ROUTER_ADDR set ✅\n"
+  else
+    printf "  ⚠️  eval-override.yaml 에 AIC_ROUTER_ADDR 누락\n"
+  fi
+  if grep -q "RMW_IMPLEMENTATION:[[:space:]]*rmw_zenoh_cpp" "$EVAL_OV"; then
+    printf "  eval-override RMW_IMPLEMENTATION=rmw_zenoh_cpp ✅\n"
+  else
+    printf "  ⚠️  eval-override.yaml 에 RMW_IMPLEMENTATION 누락\n"
+  fi
+fi
+
 if [[ $FAIL -eq 0 ]]; then
   echo
   echo "✅ pre-submit audit PASSED"

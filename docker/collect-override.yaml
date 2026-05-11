@@ -27,17 +27,25 @@ services:
       - ${AIC_EP_DIR:-./aic_results}:/root/aic_results
 
   model:
-    image: ghcr.io/nggw519/aic-dev:latest
+    # 2026-05-12: dev image → aic_eval image 로 교체 (baseline-override 와 동일 이유).
+    # aic_model_pkg.CheatCodeRecorder 는 우리 aic_work 패키지 → image 안 path 에
+    # 같이 마운트해서 PYTHONPATH 로 노출.
+    image: ghcr.io/intrinsic-dev/aic/aic_eval
+    entrypoint: ""
     command: >
-      bash -lc "source /workspace/aic/install/setup.bash 2>/dev/null || true;
-                pixi --manifest-path /workspace/aic/pixi.toml run
-                ros2 run aic_model aic_model
+      bash -lc "source /ws_aic/install/setup.bash &&
+                export PYTHONPATH=/workspace/aic_work/aic_model_pkg:$$PYTHONPATH &&
+                export ZENOH_CONFIG_OVERRIDE='connect/endpoints=[\"tcp/eval:7447\"];transport/shared_memory/enabled=false' &&
+                export ZENOH_SESSION_CONFIG_URI=/aic_zenoh_config.json5 &&
+                exec ros2 run aic_model aic_model --ros-args
                   -p policy:=aic_model_pkg.CheatCodeRecorder
                   -p use_sim_time:=true"
     volumes:
-      - /home/nggw/challenge/aic:/workspace/aic:ro
-      - /home/nggw/challenge/aic_work:/workspace/aic_work
+      - /home/nggw/challenge/aic_work:/workspace/aic_work:ro
       - ${AIC_EP_DIR}:/ep_dir
     environment:
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+      ZENOH_ROUTER_CHECK_ATTEMPTS: -1
+      AIC_ROUTER_ADDR: eval:7447
       AIC_RECORD_BAG_DIR: /ep_dir
       AIC_TRIAL_CONFIG:   ${AIC_TRIAL_CONFIG}
