@@ -122,10 +122,23 @@ else
   echo "[onstart] WARN: HF_TOKEN not set — ckpt push/pull will be skipped"
 fi
 
-# 4. Pixi 환경 준비 (aic 토킷 기반)
+# 4. Pixi 환경 준비 (aic 토킷 기반).
+# `pixi info` 는 manifest만 읽으니 install 여부 확인엔 약함 →
+# .pixi/envs/default 디렉토리에 실제 파일이 있는지로 판정.
 cd "$WORKDIR/aic"
-if ! pixi info >/dev/null 2>&1; then
+PIXI_ENV_DIR="$WORKDIR/aic/.pixi/envs/default"
+need_install=1
+if [[ -d "$PIXI_ENV_DIR" ]]; then
+  file_count=$(find "$PIXI_ENV_DIR" -maxdepth 3 -type f 2>/dev/null | head -100 | wc -l)
+  if [[ "$file_count" -gt 50 ]]; then
+    need_install=0
+  fi
+fi
+if [[ "$need_install" -eq 1 ]]; then
+  echo "[onstart] running pixi install --frozen (10-15min ROS+Gazebo download)"
   pixi install --frozen
+else
+  echo "[onstart] pixi env already installed (${file_count} files)"
 fi
 
 # 5. aic_work Python deps (옵션 — Pixi 외부, dev 작업용)
