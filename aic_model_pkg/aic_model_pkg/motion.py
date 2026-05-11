@@ -31,6 +31,10 @@ MODE_VELOCITY = 2
 FRAME_BASE = "base_link"
 FRAME_TCP  = "gripper/tcp"
 
+# EMA 스무딩 (ACTPlus 패턴 차용 — 이전 시도에서 jerk 점수 만점 기여)
+# α=0.4 → 새 명령에 40% 가중, 직전 출력에 60% 가중 → 자연스러운 저주파 통과.
+DEFAULT_EMA_ALPHA = 0.4
+
 
 @dataclass
 class Pose:
@@ -156,6 +160,38 @@ def make_approach_command(
         mode=MODE_POSITION,
     )
     return cmd.with_clamped_position()
+
+
+class EmaSmoother:
+    """지수 이동 평균 스무더 — Cartesian delta 또는 velocity 명령에 적용.
+
+    ACTPlus.py의 EMA_ALPHA=0.4 패턴 차용 (이전 시도에서 jerk 점수 안정 기여).
+
+    사용:
+        ema = EmaSmoother(dim=3, alpha=0.4)
+        smoothed = ema(np.array([0.1, 0.0, -0.05]))  # 첫 호출은 입력 그대로
+        smoothed = ema(np.array([0.12, 0.01, -0.06]))  # 이후 EMA 적용
+    """
+
+    def __init__(self, dim: int, alpha: float = DEFAULT_EMA_ALPHA) -> None:
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError(f"alpha must be in (0, 1]: {alpha}")
+        self.dim = dim
+        self.alpha = alpha
+        self._state: np.ndarray | None = None
+
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=np.float64).reshape(-1)
+        if x.shape[0] != self.dim:
+            raise ValueError(f"expected dim={self.dim}, got {x.shape[0]}")
+        if self._state is None:
+            self._state = x.copy()
+        else:
+            self._state = self.alpha * x + (1.0 - self.alpha) * self._state
+        return self._state.copy()
+
+    def reset(self) -> None:
+        self._state = None
 
 
 def make_insertion_step(

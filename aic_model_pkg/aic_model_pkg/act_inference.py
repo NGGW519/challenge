@@ -7,12 +7,60 @@ LeRobot의 ACTPolicy를 직접 import할 수 있을 때만 활성화.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# ACTPlus.py 패턴: checkpoint 해상 우선순위
+# 1. AIC_POLICY_LOCAL_DIR — 제출 이미지에 bake된 디렉토리
+# 2. AIC_POLICY_HF_REPO   — HuggingFace 모델 repo
+# 3. (constructor 인자)    — 로컬 .pt 파일
+DEFAULT_HF_REPO = os.environ.get("AIC_POLICY_HF_REPO", "nggw519/aic-ckpts")
+
+
+def resolve_ckpt_path(arg_path: str | Path | None) -> Path | None:
+    """checkpoint 위치를 환경변수 우선순위로 해상.
+
+    반환: 디렉토리 또는 단일 .pt 파일 경로. 미해상 시 None.
+
+    Priority:
+      1. AIC_POLICY_LOCAL_DIR (env) — 제출 컨테이너에 bake된 디렉토리
+      2. arg_path (constructor 인자) — 직접 지정한 ckpt 파일
+      3. AIC_POLICY_HF_REPO (env) — HuggingFace snapshot_download
+    """
+    local_dir = os.environ.get("AIC_POLICY_LOCAL_DIR")
+    if local_dir:
+        p = Path(local_dir)
+        if p.exists():
+            logger.info("ACT ckpt: AIC_POLICY_LOCAL_DIR=%s", p)
+            return p
+        logger.warning("AIC_POLICY_LOCAL_DIR set but missing: %s", p)
+
+    if arg_path is not None:
+        p = Path(arg_path)
+        if p.exists():
+            logger.info("ACT ckpt: arg=%s", p)
+            return p
+        logger.warning("constructor arg path missing: %s", p)
+
+    hf_repo = os.environ.get("AIC_POLICY_HF_REPO", DEFAULT_HF_REPO)
+    if hf_repo:
+        try:
+            from huggingface_hub import snapshot_download
+            p = Path(snapshot_download(
+                repo_id=hf_repo,
+                allow_patterns=["*.pt", "*.safetensors", "config.json", "stats.json"],
+            ))
+            logger.info("ACT ckpt: HF repo %s → %s", hf_repo, p)
+            return p
+        except Exception as e:
+            logger.warning("HF snapshot_download(%s) failed: %s", hf_repo, e)
+
+    return None
 
 
 class ACTInference:
@@ -24,15 +72,30 @@ class ACTInference:
         self._policy: Any = None
         self._chunk: np.ndarray | None = None
         self._chunk_idx = 0
-        if ckpt_path and Path(ckpt_path).exists():
-            try:
-                self._init_policy(Path(ckpt_path))
-                self.disabled = False
-                logger.info("ACTInference loaded weights: %s", ckpt_path)
-            except Exception as e:  # pragma: no cover
-                logger.warning("ACTInference init failed (%s) — Stage B will be a no-op", e)
-        else:
-            logger.warning("ACT ckpt missing (%s) — Stage B is a no-op", ckpt_path)
+
+        # ACTPlus 패턴: env var (LOCAL_DIR > HF_REPO) > 생성자 인자 순으로 해상.
+        resolved = resolve_ckpt_path(ckpt_path)
+        if resolved is None:
+            logger.warning("ACT ckpt unresolvable — Stage B is a no-op")
+            return
+
+        # 디렉토리면 최신 step_*.pt 또는 final.pt 선택
+        if resolved.is_dir():
+            ckpt = (resolved / "final.pt")
+            if not ckpt.exists():
+                ckpts = sorted(resolved.glob("step_*.pt"))
+                ckpt = ckpts[-1] if ckpts else None
+            if ckpt is None or not ckpt.exists():
+                logger.warning("no .pt file in %s — Stage B is a no-op", resolved)
+                return
+            resolved = ckpt
+
+        try:
+            self._init_policy(resolved)
+            self.disabled = False
+            logger.info("ACTInference loaded weights: %s", resolved)
+        except Exception as e:  # pragma: no cover
+            logger.warning("ACTInference init failed (%s) — Stage B will be a no-op", e)
 
     def _init_policy(self, ckpt: Path) -> None:
         import torch

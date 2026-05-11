@@ -29,6 +29,7 @@ except Exception:
 
 from .act_inference import ACTInference
 from .motion import (
+    EmaSmoother,
     MotionCommand,
     make_approach_command,
     make_insertion_step,
@@ -44,10 +45,16 @@ WEIGHTS_DIR = Path(__file__).parent / "weights"
 ACT_CKPT = WEIGHTS_DIR / "act_v1.pt"
 DETECTOR_CKPT = WEIGHTS_DIR / "port_detector_v1.pt"
 
-# Stage 시간 예산 (초)
-T_STAGE_A = 5.0
-T_STAGE_B = 8.0
-T_STAGE_C = 15.0
+# Stage 시간 예산 (초) — task.time_limit이 알려지지 않을 때의 fallback default.
+# 실제 실행 시 _allocate_budget() 으로 task.time_limit × 0.85 / 3 stage 분할.
+T_STAGE_A_DEFAULT = 5.0
+T_STAGE_B_DEFAULT = 8.0
+T_STAGE_C_DEFAULT = 15.0
+# 시간 예산 fraction — task.time_limit의 이 비율까지만 사용 (timeout 회피).
+# ACTPlus.py BUDGET_FRACTION = 0.85 패턴 차용.
+BUDGET_FRACTION = 0.85
+# Stage 별 분배 비율 (합 = 1.0)
+STAGE_BUDGET_SHARES = (0.20, 0.35, 0.45)  # A:B:C = 5초:8.75초:11.25초 @ 25초 예산
 
 # Stage B → C 전환 hysteresis (SOTA review 권고: ResiP/TacDiffusion 류는 명시적
 # 전환 조건이 없으면 force buildup 상태로 C 진입 → force penalty 누적).
@@ -79,6 +86,33 @@ class HybridPolicy(Policy):
         self._cached_target_world: np.ndarray | None = None
         self._emergency = False
         self._watchdog: ForceWatchdog | None = None
+        # Cartesian xyz EMA — ACTPlus.py 패턴 차용. 매 stage 진입 시 reset.
+        self._delta_smoother = EmaSmoother(dim=3, alpha=0.4)
+        # Stage 시간 예산 — insert_cable 호출 시 task.time_limit 으로 동적 결정.
+        self._budget_a = T_STAGE_A_DEFAULT
+        self._budget_b = T_STAGE_B_DEFAULT
+        self._budget_c = T_STAGE_C_DEFAULT
+
+    def _allocate_budget(self, task: Any) -> None:
+        """task.time_limit × 0.85 를 stage별로 분배. 타임아웃 회피용 safety margin.
+        time_limit 미상 시 default 유지."""
+        limit = getattr(task, "time_limit", None)
+        try:
+            limit_f = float(limit) if limit is not None else None
+        except (TypeError, ValueError):
+            limit_f = None
+        if limit_f is None or limit_f <= 0:
+            self.logger.info("task.time_limit unset — using default budgets")
+            return
+        usable = limit_f * BUDGET_FRACTION
+        a, b, c = STAGE_BUDGET_SHARES
+        self._budget_a = usable * a
+        self._budget_b = usable * b
+        self._budget_c = usable * c
+        self.logger.info(
+            "budget alloc: task.time_limit=%.1f → A=%.1fs B=%.1fs C=%.1fs (%.0f%% of limit)",
+            limit_f, self._budget_a, self._budget_b, self._budget_c, BUDGET_FRACTION * 100,
+        )
 
     # ------------------------------------------------------------------ #
     # entry point
@@ -87,6 +121,8 @@ class HybridPolicy(Policy):
         """aic_model이 호출하는 진입점. blocking, 작업 완료까지."""
         try:
             send_feedback("hybrid: starting")
+            self._allocate_budget(task)
+            self._delta_smoother.reset()
             self._start_watchdog(get_observation)
             self._stage_a(task, get_observation, move_robot, send_feedback)
             self._stage_b(task, get_observation, move_robot, send_feedback)
@@ -189,7 +225,7 @@ class HybridPolicy(Policy):
         self._send(cmd, move_robot)
 
         # 도달 확인 — TCP가 target 근방으로 5mm 이내 진입
-        deadline = time.monotonic() + T_STAGE_A
+        deadline = time.monotonic() + self._budget_a
         while time.monotonic() < deadline and not self._emergency:
             tcp = self._get_tcp_pose(get_obs())
             if tcp is not None:
@@ -290,7 +326,7 @@ class HybridPolicy(Policy):
         # ACT chunk inference loop는 ROS observation 스키마에 강하게 의존하므로
         # 실제 forward 호출 + MotionCommand 발행은 vast.ai 인스턴스에서 채움.
         # 여기서는 hysteresis 기반 전환 조건을 명시적으로 검사.
-        deadline = time.monotonic() + T_STAGE_B
+        deadline = time.monotonic() + self._budget_b
         condition_started_at: float | None = None
         while time.monotonic() < deadline and not self._emergency:
             if self._should_transition_to_c(get_obs()):
@@ -334,7 +370,7 @@ class HybridPolicy(Policy):
     def _stage_c(self, task, get_obs, move_robot, send_feedback) -> bool:
         send_feedback("stage_C: compliant insertion")
         period = 1.0 / STAGE_C_LOOP_HZ
-        deadline = time.monotonic() + T_STAGE_C
+        deadline = time.monotonic() + self._budget_c
 
         # baseline wrench (시뮬 시작 시 미세한 잔류값 보정)
         f_baseline = self._get_wrench(get_obs())[:3]
