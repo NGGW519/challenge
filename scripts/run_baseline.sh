@@ -17,6 +17,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESULTS_DIR="${ROOT}/logs/baseline/${POLICY}"
 mkdir -p "$RESULTS_DIR"
 
+# aic 토킷 경로 자동 감지 (ROOT 상위에서 찾기 또는 /workspace)
+if [[ -d "${ROOT}/../aic/docker" ]]; then
+  AIC_ROOT="${ROOT}/../aic"
+elif [[ -d "/workspace/aic/docker" ]]; then
+  AIC_ROOT="/workspace/aic"
+else
+  echo "[ERROR] aic 토킷을 찾을 수 없습니다. 경로를 확인하세요."
+  exit 1
+fi
+
 # CheatCode 만 ground_truth=true
 GT="false"
 [[ "$POLICY" == "CheatCode" ]] && GT="true"
@@ -33,14 +43,14 @@ for i in $(seq 1 "$N_REPEATS"); do
   AIC_GROUND_TRUTH="${GT}" \
   AIC_RESULTS_DIR="${RUN_DIR}" \
     docker compose \
-      -f /workspace/aic/docker/docker-compose.yaml \
+      -f "${AIC_ROOT}/docker/docker-compose.yaml" \
       -f "${ROOT}/docker/baseline-override.yaml" \
       up --abort-on-container-exit --exit-code-from eval eval model \
       > "${RUN_DIR}/compose.log" 2>&1 \
       || echo "[WARN] ${RUN_ID} non-zero exit (logs: ${RUN_DIR}/compose.log)"
 
   docker compose \
-    -f /workspace/aic/docker/docker-compose.yaml \
+    -f "${AIC_ROOT}/docker/docker-compose.yaml" \
     -f "${ROOT}/docker/baseline-override.yaml" \
     down --remove-orphans >/dev/null 2>&1 || true
 done
