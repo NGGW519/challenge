@@ -33,7 +33,6 @@ services:
     command: >
       bash -lc "source /ws_aic/install/setup.bash &&
                 export ZENOH_CONFIG_OVERRIDE='connect/endpoints=[\"tcp/eval:7447\"];transport/shared_memory/enabled=false' &&
-                export ZENOH_SESSION_CONFIG_URI=/aic_zenoh_config.json5 &&
                 exec ros2 run aic_model aic_model --ros-args
                   -p policy:=${AIC_POLICY_MODULE:-aic_example_policies.ros.WaveArm}
                   -p use_sim_time:=true"

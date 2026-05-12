@@ -354,16 +354,40 @@ R2: 빠른 vast.ai 풀용. HF Hub: 영구 백업 + 버전 관리.
 
 ---
 
-## 8. 결정 로그 (작성 시 채움)
+## 8. 결정 로그
 
-- **결정**: 이미지 해상도 480×640? 아니면 720×1280?
-  - 480×640: 학습 속도 ↑, 메모리 ↓
-  - 720×1280: 미세 정렬에 유리할 수 있음
-  - 초기 결정: 480×640. ablation 시 720×1280 비교.
-- **결정**: action space — joint delta vs Cartesian delta?
-  - Cartesian delta: TCP 기반 → 시각 servoing에 직관적
-  - joint delta: impedance 직접 제어 가능
-  - 초기 결정: Cartesian delta + 별도 채널로 gripper. Phase 6에서 joint delta 비교.
+### 8.1 이미지 해상도: 480×640
+- **고려**: 480×640 (학습 속도/메모리 ↑) vs 720×1280 (미세 정렬 유리)
+- **결정**: 480×640
+- **근거**: ALOHA/ACT 원본도 480×640 사용. 우리 24GB VRAM 에서 chunk_size=100 + 3 cam + batch=32 가 안전. ablation 으로 720×1280 비교는 Phase 7 까지 미룸.
+- **트리거**: Phase 5 평가에서 Stage A detection mAP < 0.85 면 해상도 ↑ 고려.
+
+### 8.2 Action space: Cartesian delta (xyz + rpy + grip)
+- **고려**: Cartesian delta vs joint delta vs absolute pose
+- **결정**: Cartesian velocity delta `[vx, vy, vz, wx, wy, wz, grip]` 7-D
+- **근거**: 이전 시도 `scripts/rosbag_to_lerobot.py` 가 `ControllerState.tcp_velocity` 사용한 패턴 (RunACT.py:273 호환). Cartesian impedance controller 의 자연 입력. Phase 5 Stage C 의 admittance 와도 호환.
+- **트리거**: Phase 5 에서 stage 전환 시 jerk 폭증 → joint delta 비교 ablation.
+
+### 8.3 Trial 분포: SFP×0.36 + SFP×0.36 + SC×0.18 + edge×0.10
+- **결정**: 4 시나리오 가중 (`DEFAULT_SCENARIO_DIST` in `collect_demos.py`)
+- **근거**: 평가 trial 수 (SFP×2 + SC×1) = 2:1 비율. edge (grip ±3mm) 추가는 robustness 확보.
+- **트리거**: Phase 5 에서 SC trial 만 평균 점수 ≥ 20pt 낮으면 SC 비율 ↑.
+
+### 8.4 Episode timeout: 1800s (이전 600s 회귀 직접 대응)
+- **결정**: `episode_timeout_s` default 1800. min_success_rate 0.8 abort gate.
+- **근거**: Day 5 진단 — 이전 시도의 timeout 600s 가 한 ep 의 3 trial × 20분(CheatCode descent 느림)에 부족 → trajectory 잘림 → marginal-mean collapse. 1800s 면 충분 + abort gate 가 systemic 오류 시 즉시 stop.
+
+### 8.5 검증 layer 5중 — sanity gate 코드화
+- **결정**: validate_episode + motion_frame_ratio + min_success_rate + sample mp4 hook + action_amplify 옵션
+- **근거**: 이전 시도가 모든 frame 을 학습에 넣어 정지 데이터로 collapse. 5중 검증 어느 하나라도 트립하면 자동 격리/중단.
+
+### 8.6 백업: HuggingFace Hub 단독
+- **결정**: ckpt+dataset 모두 `nggw519/aic-ckpts` + `nggw519/aic-datasets` private repo.
+- **근거**: R2/S3 추가 자격증명 부담 vs HF 단독 단순성. 우리 작업 패턴 (작은 ckpt 자주 push, dataset 한 번 push)에서 속도 차이 결정적 아님 (2026-05-10 결정).
+
+### 8.7 docker run 단일 호스트 패턴 (lifecycle 함정 회피)
+- **결정**: `data/collect_demos.py` 의 docker compose → docker run 두 컨테이너 (같은 aic_eval image, host network) 로 변경 (D1).
+- **근거**: 2026-05-11 lifecycle ACTIVATE 실패 → I3 분석에서 호스트 pixi env / dev image 분리 가 zenoh discovery 단절 원인. aic_eval image 통일 + host network 가 토킷 의도 환경과 가장 가깝다.
 
 ---
 

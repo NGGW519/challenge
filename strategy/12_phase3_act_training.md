@@ -304,12 +304,41 @@ bash scripts/run_baseline.sh ACTOnly 30  # 30 rollouts × 3 trial = 90 trial
 
 ---
 
-## 9. 결정 로그 (작성하면서)
+## 9. 결정 로그
 
-- **결정**: chunk_size 100 vs 50
-- **결정**: action = Cartesian delta (Phase 2와 동일)
-- **결정**: backbone resnet18 vs resnet34 — A/B 학습 후 비교
-- **결정**: 학습 step 200k vs 300k
+### 9.1 chunk_size = 100, n_action_steps = 20
+- **결정**: chunk_size 100 (5초 분량 @ 20Hz) + n_action_steps 20 (1초 실행 후 재추론)
+- **근거**: ACT 원본 (ALOHA RSS'23) 의 검증된 값. Comp-ACT 도 동일. 우리 task 길이 (~10-30s) 에 적합.
+- **트리거**: Phase 5 평가에서 stage 전환 시 stale action (마지막 5초 chunk 가 contact 상황 변화에 둔감) 관찰되면 chunk_size 50 으로 ablation.
+
+### 9.2 backbone = ResNet18
+- **결정**: ResNet18 (vision backbone). pretrained_backbone_weights = None (제출 컨테이너의 isolated network 가 torchvision 다운로드 차단 — `aic_act_plus.ros.ACTPlus` 가 확인한 함정).
+- **근거**: ACT 원본 + Comp-ACT 동일. 우리 L4 24GB 에서 batch_size=32 + 3 cam 가 안전. 학습된 weights 가 model.safetensors 에서 복원되므로 pretrained 안 받아도 OK.
+- **트리거**: Phase 6 multi-sim DR 후에도 OOD 점수 ↓ 면 ResNet34 또는 ViT-Tiny ablation.
+
+### 9.3 학습 step = 200k (cosine + warmup 500)
+- **결정**: 200,000 step, AdamW lr=1e-4 (head)/1e-5(backbone), cosine schedule.
+- **근거**: ALOHA 학습 step 50k~200k. 우리 1100 ep × ~200 frame ≈ 220k sample → 200k step 이면 ~1 epoch 가까이. L40S 에서 ~1.5-2일.
+- **트리거**: total_loss > 0.5 @ step 100k 면 lr/schedule 재고. < 0.2 @ step 150k 면 조기 종료 가능.
+
+### 9.4 state vector = 13-D (joint 7 + force 3 + torque 3) — D2 contract
+- **결정**: `observation.state` 차원 13. `HybridPolicy.ACT_STATE_DIM`/`ACT_STATE_LAYOUT` 가 학습/추론 contract.
+- **근거**: Day 5 진단 (3/300) — state shape mismatch (26 vs 7) 가 marginal-mean collapse 1차 원인. FARM 논문이 F/T modality 빼면 contact-rich subtask -20~40pt 보고. joint 만으로 부족.
+- **트리거**: `tests/test_act_obs_contract.py` 가 회귀 즉시 잡음. 변경 시 학습/추론 양쪽 동시 수정 필요.
+
+### 9.5 action_amplify (bag_to_lerobot) — 데이터셋 std 인위 확대
+- **결정**: default `--action-amplify 1.0`, 권장 4.0 (ACTPlus RAW_ACTION_SCALE 패턴).
+- **근거**: Day 5 진단 — CheatCode descent 속도 ~1cm/s 라 action.std 너무 작아 ACT 가 평균만 학습. 4배 증폭 시 std 가 학습 의미 있는 범위로 이동.
+- **트리거**: Phase 3 학습 후 raw action 변화 < 1% 면 amplify ↑. 학습/추론 amplify 가 동일하면 평가 시 영향 없음.
+
+### 9.6 ckpt 백업 = HF Hub 매 5k step
+- **결정**: `train_act.py` 의 `--ckpt_every 5000` + `push_ckpt` 가 `nggw519/aic-ckpts` 에 push.
+- **근거**: vast.ai 인스턴스 휘발성. 5,000 step = ~25분 = 손실 상한.
+
+### 9.7 ACT v1 학습 후 ablation 우선순위
+1. **Comp-ACT (stiffness head)** — Phase 5 평가에서 force penalty 평균 ≥ 6 이면 발동 (project_design_decisions 참고).
+2. **chunk_size 50** — 위 9.1 트리거 조건 시.
+3. **state 차원 확장** — wrench 외 controller_state.tcp_velocity (3) + joint_velocity (7) 추가 시도. 단 변경 시 contract test + 재학습 필수.
 
 ---
 

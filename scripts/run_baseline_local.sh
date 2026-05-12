@@ -96,10 +96,10 @@ for i in $(seq 1 "$N_REPEATS"); do
     bash -lc "
       set -e
       source /ws_aic/install/setup.bash
-      # zenoh router 연결 + shared_memory off (다른 컨테이너이므로 SHM 불가)
+      # zenoh router 연결 + shared_memory off (다른 컨테이너이므로 SHM 불가).
+      # I3 분석(2026-05-12): 토킷 aic_model entrypoint는 ZENOH_SESSION_CONFIG_URI를
+      # 설정하지 않는다. ZENOH_CONFIG_OVERRIDE 만으로 router 연결 충분.
       export ZENOH_CONFIG_OVERRIDE='connect/endpoints=[\"tcp/${ROUTER_ADDR}\"];transport/shared_memory/enabled=false'
-      # 토킷이 제공하는 ACL/peer config (model session 도 같은 base config 사용)
-      export ZENOH_SESSION_CONFIG_URI=/aic_zenoh_config.json5
       exec ros2 run aic_model aic_model --ros-args \
         -p use_sim_time:=true \
         -p policy:=aic_example_policies.ros.${POLICY}

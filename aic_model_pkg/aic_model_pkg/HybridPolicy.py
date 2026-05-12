@@ -369,16 +369,24 @@ class HybridPolicy(Policy):
         # 시간 초과는 점수 측면에서 손해지만 B→C 강제 진입 (Stage C가 spiral search로 회복).
         return True
 
+    # ACT state vector 레이아웃 (학습 코드와 1:1 contract).
+    # 변경 시 training/train_act.py 의 state_dim 가정 + tests/test_act_obs_contract.py 같이 수정.
+    ACT_STATE_DIM = 13
+    ACT_STATE_LAYOUT = (
+        "joint[0..6]",        # UR5e 6 joint + gripper position
+        "wrench.force.xyz",   # F/T force (3)
+        "wrench.torque.xyz",  # F/T torque (3)
+    )
+
     def _build_act_observation(self, obs: Any) -> dict[str, np.ndarray] | None:
         """Observation msg → ACT 입력 dict.
 
         키 컨벤션은 LeRobot 학습 데이터셋과 일치해야 한다:
           - observation.images.{left,center,right}: (3, H, W) float32 [0,1]
-          - observation.state: (D,) float32
+          - observation.state: (13,) float32 = [joint 7] + [force 3] + [torque 3]
 
-        Phase 3 학습 코드가 어떤 state 차원을 쓰는지에 따라 D 가 달라지므로,
-        joint_state.position 만 우선 채우고 wrench 는 학습 시 정규화 stats 와
-        함께 추가 예정. ACT 모델이 stats 미사용 시 raw 그대로 흘려도 됨.
+        Day 5 진단 (FARM 논문): F/T modality 빼면 contact-rich subtask 성공률
+        -20~40pt. 7-D joint only 는 위험. 13-D (joint+wrench) 가 우리 contract.
         """
         imgs_list = self._extract_images(obs)
         if imgs_list is None or len(imgs_list) < 3:
@@ -390,10 +398,19 @@ class HybridPolicy(Policy):
                 "observation.images.center": self._img_to_chw_float(center),
                 "observation.images.right":  self._img_to_chw_float(right),
             }
+            state = np.zeros(self.ACT_STATE_DIM, dtype=np.float32)
+
+            # joint[0..6] — 7 elements (6 joint + gripper or 7 joint)
             js = getattr(obs, "joint_states", None) or getattr(obs, "joint_state", None)
             if js is not None and hasattr(js, "position"):
-                state = np.asarray(list(js.position)[:7], dtype=np.float32)
-                out["observation.state"] = state
+                pos = list(js.position)[:7]
+                state[: len(pos)] = pos
+
+            # wrench[7..12] — 6 elements (force xyz + torque xyz)
+            w = self._get_wrench(obs)
+            state[7:13] = w[:6].astype(np.float32)
+
+            out["observation.state"] = state
             return out
         except Exception as e:
             self.logger.debug("_build_act_observation failed: %s", e)

@@ -27,19 +27,14 @@ from pathlib import Path
 
 logger = logging.getLogger("auto_label_ports")
 
-# 클래스 이름 → ID (port_detector.py와 일치해야 함)
-CLASS_ID = {"sfp_port": 0, "sc_port": 1, "sfp_plug": 2, "sc_plug": 3,
-            "nic_card": 4, "enclosure_edge": 5}
-
-# 각 클래스의 픽셀 bbox 크기 (정렬된 카메라 ~50cm 거리에서의 추정).
-# 실측 후 조정 필요.
-DEFAULT_BBOX_SIZE = {
-    "sfp_port": (24, 16),
-    "sc_port":  (28, 18),
-    "sfp_plug": (60, 30),
-    "sc_plug":  (60, 30),
-    "nic_card": (140, 90),
-}
+# 클래스 ID + bbox 크기 + YOLO 변환은 port_labeling.py 로 분리됨 (ROS-free 테스트 가능)
+from data.port_labeling import (  # noqa: E402
+    CLASS_ID,
+    DEFAULT_BBOX_SIZE_PX as DEFAULT_BBOX_SIZE,
+    make_yolo_label,
+    project_point_to_pixel,
+    write_yolo_label_file,
+)
 
 # 포트 경로 (TF frame 이름 기준)
 PORT_FRAMES = {
@@ -81,7 +76,9 @@ def parse_split(s: str) -> tuple[float, float, float]:
 
 
 def write_yolo_label(label_path: Path, items: list[tuple[int, float, float, float, float]]) -> None:
-    """items: list of (cls, cx_norm, cy_norm, w_norm, h_norm)."""
+    """items: list of (cls, cx_norm, cy_norm, w_norm, h_norm).
+    레거시 호환을 위한 wrapper — 새 코드는 port_labeling.write_yolo_label_file 사용 권장.
+    """
     label_path.parent.mkdir(parents=True, exist_ok=True)
     with label_path.open("w") as f:
         for cls, cx, cy, w, h in items:

@@ -143,41 +143,120 @@ def make_scene(scenario: str, seed: int, scene_yaml: Path,
     subprocess.run(cmd, check=True, cwd=ROOT)
 
 
-def run_episode_via_compose(ep_dir: Path, scene_yaml: Path, args: argparse.Namespace) -> bool:
-    """docker compose up + 종료. dry_run이면 시뮬만."""
-    env = os.environ.copy()
-    env.update({
-        "AIC_POLICY_MODULE":  args.policy_module,
-        "AIC_GROUND_TRUTH":   args.ground_truth,
-        "AIC_RESULTS_DIR":    str(ep_dir),
-        "AIC_TRIAL_CONFIG":   str(scene_yaml),
-        "AIC_EP_DIR":         str(ep_dir),
-    })
-    compose_args = [
-        "docker", "compose",
-        "-f", "/workspace/aic/docker/docker-compose.yaml",
-        "-f", str(ROOT / "docker" / "collect-override.yaml"),
-    ]
-    up = [*compose_args, "up", "--abort-on-container-exit",
-          "--exit-code-from", "eval", "eval", "model"]
-    down = [*compose_args, "down", "--remove-orphans"]
+AIC_EVAL_IMAGE = "ghcr.io/intrinsic-dev/aic/aic_eval:latest"
 
+
+def _docker_run_eval(ep_dir: Path, scene_yaml: Path, args: argparse.Namespace) -> str:
+    """eval 컨테이너 띄움 (-d). 컨테이너 이름 반환. scripts/run_baseline_local.sh 패턴."""
+    name = f"aic_eval_ep_{int(time.time())}"
+    cmd = [
+        "docker", "run", "-d", "--rm", "--name", name,
+        "--gpus", "all", "--network", "host",
+        "-e", "RMW_IMPLEMENTATION=rmw_zenoh_cpp",
+        "-e", "ZENOH_ROUTER_CHECK_ATTEMPTS=-1",
+        "-e", f"AIC_ENABLE_ACL={os.environ.get('AIC_ENABLE_ACL', 'false')}",
+        "-e", f"AIC_EVAL_PASSWD={os.environ.get('AIC_EVAL_PASSWD', '')}",
+        "-e", f"AIC_MODEL_PASSWD={os.environ.get('AIC_MODEL_PASSWD', '')}",
+        "-v", f"{ep_dir}:/root/aic_results",
+        "-v", f"{scene_yaml}:/custom_config/sample_config.yaml:ro",
+        AIC_EVAL_IMAGE,
+        "gazebo_gui:=false", "launch_rviz:=false",
+        f"ground_truth:={args.ground_truth}",
+        "start_aic_engine:=true",
+        "shutdown_on_aic_engine_exit:=true",
+        "model_discovery_timeout_seconds:=600",
+        "aic_engine_config_file:=/custom_config/sample_config.yaml",
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return name
+
+
+def _docker_run_model(eval_name: str, args: argparse.Namespace, log_path: Path) -> int:
+    """model 컨테이너 띄움 (foreground). 같은 image, host network. exit code 반환."""
+    router_addr = os.environ.get("AIC_ROUTER_ADDR", "localhost:7447")
+    cmd = [
+        "docker", "run", "--rm", "--name", f"aic_model_for_{eval_name}",
+        "--gpus", "all", "--network", "host",
+        "-e", "RMW_IMPLEMENTATION=rmw_zenoh_cpp",
+        "-e", "ZENOH_ROUTER_CHECK_ATTEMPTS=-1",
+        "-e", f"AIC_ENABLE_ACL={os.environ.get('AIC_ENABLE_ACL', 'false')}",
+        "-e", f"AIC_EVAL_PASSWD={os.environ.get('AIC_EVAL_PASSWD', '')}",
+        "-e", f"AIC_MODEL_PASSWD={os.environ.get('AIC_MODEL_PASSWD', '')}",
+        "--entrypoint", "",
+        AIC_EVAL_IMAGE,
+        "bash", "-lc",
+        f"""
+        set -e
+        source /ws_aic/install/setup.bash
+        export ZENOH_CONFIG_OVERRIDE='connect/endpoints=["tcp/{router_addr}"];transport/shared_memory/enabled=false'
+        export ZENOH_SESSION_CONFIG_URI=/aic_zenoh_config.json5
+        exec ros2 run aic_model aic_model --ros-args \
+          -p use_sim_time:=true \
+          -p policy:={args.policy_module}
+        """,
+    ]
+    with log_path.open("w") as f:
+        proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
+                              timeout=args.episode_timeout_s, check=False)
+    return proc.returncode
+
+
+def _wait_for_zenoh(eval_name: str, timeout_s: int = 30) -> bool:
+    """eval 컨테이너 안 zenoh router(7447)가 listen 시작했는지 확인."""
+    for _ in range(timeout_s):
+        try:
+            r = subprocess.run(
+                ["docker", "exec", eval_name, "bash", "-lc",
+                 "ss -ltn 2>/dev/null | grep -q ':7447'"],
+                check=False, capture_output=True, timeout=2,
+            )
+            if r.returncode == 0:
+                return True
+        except subprocess.SubprocessError:
+            pass
+        time.sleep(1)
+    return False
+
+
+def run_episode_via_docker(ep_dir: Path, scene_yaml: Path, args: argparse.Namespace) -> bool:
+    """eval + model 두 컨테이너를 같은 aic_eval image / host network 로 실행.
+
+    이전엔 docker compose + dev image 였으나 host pixi env 또는 mismatched image 시
+    zenoh/lifecycle 통신이 어긋남 (2026-05-11 진단). run_baseline_local.sh 와 동일 패턴.
+    """
     if args.dry_run:
-        logger.info("[dry_run] would run: %s", " ".join(up))
+        logger.info("[dry_run] would docker-run eval+model for %s", ep_dir.name)
         return True
 
+    eval_name = ""
     try:
-        proc = subprocess.run(up, env=env, cwd=ROOT,
-                              timeout=args.episode_timeout_s,
-                              check=False)
-        ok = proc.returncode == 0
+        eval_name = _docker_run_eval(ep_dir, scene_yaml, args)
+        if not _wait_for_zenoh(eval_name, timeout_s=30):
+            logger.warning("zenoh router timeout — model may fail to connect")
+
+        rc = _docker_run_model(eval_name, args, ep_dir / "model.log")
+        # eval은 shutdown_on_aic_engine_exit=true 라 자동 종료
+        try:
+            subprocess.run(["docker", "wait", eval_name],
+                           check=False, timeout=60, capture_output=True)
+        except subprocess.SubprocessError:
+            pass
+        # eval log 수집
+        with (ep_dir / "eval.log").open("w") as f:
+            subprocess.run(["docker", "logs", eval_name],
+                           stdout=f, stderr=subprocess.STDOUT, check=False)
+        return rc == 0
     except subprocess.TimeoutExpired:
         logger.warning("episode timed out at %.1fs", args.episode_timeout_s)
-        ok = False
+        return False
     finally:
-        subprocess.run(down, env=env, cwd=ROOT, check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return ok
+        if eval_name:
+            subprocess.run(["docker", "rm", "-f", eval_name, f"aic_model_for_{eval_name}"],
+                           check=False, capture_output=True)
+
+
+# 후방 호환: 기존 이름도 alias
+run_episode_via_compose = run_episode_via_docker
 
 
 def collect_one(args: argparse.Namespace, idx: int, scenario: str, seed: int,
@@ -190,7 +269,7 @@ def collect_one(args: argparse.Namespace, idx: int, scenario: str, seed: int,
     t0 = time.monotonic()
     try:
         make_scene(scenario, seed, scene_yaml)
-        ok = run_episode_via_compose(ep_dir, scene_yaml, args)
+        ok = run_episode_via_docker(ep_dir, scene_yaml, args)
     except Exception as e:
         logger.exception("episode %s failed", ep_id)
         return EpisodeResult(ep_id=ep_id, scenario=scenario, seed=seed,
